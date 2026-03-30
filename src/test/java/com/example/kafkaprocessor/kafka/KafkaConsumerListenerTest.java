@@ -3,6 +3,7 @@ package com.example.kafkaprocessor.kafka;
 import com.example.kafkaprocessor.control.ControlService;
 import com.example.kafkaprocessor.deadletter.DeadLetterService;
 import com.example.kafkaprocessor.deadletter.ReasonCode;
+import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
 import com.example.kafkaprocessor.model.EventHeader;
 import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.model.MessageBody;
@@ -30,6 +31,7 @@ class KafkaConsumerListenerTest {
     @Mock private MessageProcessorService messageProcessorService;
     @Mock private KafkaProducerService kafkaProducerService;
     @Mock private DeadLetterService deadLetterService;
+    @Mock private SiphonEvaluator siphonEvaluator;
     @Mock private Acknowledgment acknowledgment;
 
     private KafkaConsumerListener listener;
@@ -48,7 +50,7 @@ class KafkaConsumerListenerTest {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         listener = new KafkaConsumerListener(
                 objectMapper, controlService,
-                messageProcessorService, kafkaProducerService, deadLetterService, scheduler);
+                messageProcessorService, kafkaProducerService, deadLetterService, scheduler, siphonEvaluator);
         // Zero delay so deferred work fires immediately, keeping tests fast and deterministic
         ReflectionTestUtils.setField(listener, "processingDelayMs", 0L);
     }
@@ -94,6 +96,7 @@ class KafkaConsumerListenerTest {
     @Test
     void bdeEvent_siphonsToSiphonTopic_acks() throws InterruptedException {
         String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"msg-bde\"}}";
+        when(siphonEvaluator.shouldSiphon(any())).thenReturn(true);
 
         listener.listen(record(bdePayload), acknowledgment);
 
@@ -106,6 +109,7 @@ class KafkaConsumerListenerTest {
     @Test
     void bdeEvent_siphonFailure_noAck() throws InterruptedException {
         String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"msg-bde\"}}";
+        when(siphonEvaluator.shouldSiphon(any())).thenReturn(true);
         doThrow(new KafkaPublishException("siphon failed", new RuntimeException()))
                 .when(kafkaProducerService).siphon(any());
 
@@ -122,7 +126,7 @@ class KafkaConsumerListenerTest {
         ScheduledExecutorService nonExecutingScheduler = mock(ScheduledExecutorService.class);
         KafkaConsumerListener l = new KafkaConsumerListener(
                 objectMapper, controlService, messageProcessorService,
-                kafkaProducerService, deadLetterService, nonExecutingScheduler);
+                kafkaProducerService, deadLetterService, nonExecutingScheduler, siphonEvaluator);
         ReflectionTestUtils.setField(l, "processingDelayMs", 0L);
 
         Acknowledgment ack2 = mock(Acknowledgment.class);

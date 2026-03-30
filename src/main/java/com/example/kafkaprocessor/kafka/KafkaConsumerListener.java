@@ -5,7 +5,7 @@ import com.example.kafkaprocessor.deadletter.DeadLetterService;
 import com.example.kafkaprocessor.deadletter.ReasonCode;
 import com.example.kafkaprocessor.logging.MdcContext;
 import com.example.kafkaprocessor.model.KafkaMessage;
-import com.example.kafkaprocessor.model.EventType;
+import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -35,6 +35,7 @@ public class KafkaConsumerListener {
     private final KafkaProducerService kafkaProducerService;
     private final DeadLetterService deadLetterService;
     private final ScheduledExecutorService processingScheduler;
+    private final SiphonEvaluator siphonEvaluator;
 
     // In-memory set of messageIds currently in-flight (consumer thread → worker thread).
     // add() returns false if already present → duplicate detected in nanoseconds with no DB call.
@@ -49,13 +50,15 @@ public class KafkaConsumerListener {
                                  MessageProcessorService messageProcessorService,
                                  KafkaProducerService kafkaProducerService,
                                  DeadLetterService deadLetterService,
-                                 ScheduledExecutorService processingScheduler) {
+                                 ScheduledExecutorService processingScheduler,
+                                 SiphonEvaluator siphonEvaluator) {
         this.objectMapper = objectMapper;
         this.controlService = controlService;
         this.messageProcessorService = messageProcessorService;
         this.kafkaProducerService = kafkaProducerService;
         this.deadLetterService = deadLetterService;
         this.processingScheduler = processingScheduler;
+        this.siphonEvaluator = siphonEvaluator;
     }
 
     @KafkaListener(topics = "${kafka.topic.input}", containerFactory = "kafkaListenerContainerFactory")
@@ -80,11 +83,9 @@ public class KafkaConsumerListener {
             log.info("Message received");
 
             // --- Backdated Endorsement siphon (fast-path before any other processing) ---
-            // END messages with backdated=true are forwarded as-is to the siphon topic and acked
-            // immediately. They bypass the delay, duplicate gate, and processing pipeline.
-            if (message.event() != null
-                    && EventType.END.equals(message.event().eventType())
-                    && Boolean.TRUE.equals(message.event().backdated())) {
+            // Delegated to SiphonEvaluator so the trigger criteria can be replaced or extended
+            // without modifying this class. The default implementation matches END + backdated=true.
+            if (siphonEvaluator.shouldSiphon(message)) {
                 log.info("Backdated Endorsement detected, siphoning to siphon topic");
                 try {
                     kafkaProducerService.siphon(message);
