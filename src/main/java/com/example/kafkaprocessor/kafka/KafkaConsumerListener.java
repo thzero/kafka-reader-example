@@ -79,11 +79,13 @@ public class KafkaConsumerListener {
         try {
             log.info("Message received");
 
-            // --- BDE siphon (fast-path before any other processing) ---
-            // BDE messages are forwarded as-is to the siphon topic and acked immediately.
-            // They bypass the delay, duplicate gate, and processing pipeline.
-            if (message.event() != null && EventType.BDE.equals(message.event().eventType())) {
-                log.info("BDE event type detected, siphoning to siphon topic");
+            // --- Backdated Endorsement siphon (fast-path before any other processing) ---
+            // END messages with backdated=true are forwarded as-is to the siphon topic and acked
+            // immediately. They bypass the delay, duplicate gate, and processing pipeline.
+            if (message.event() != null
+                    && EventType.END.equals(message.event().eventType())
+                    && Boolean.TRUE.equals(message.event().backdated())) {
+                log.info("Backdated Endorsement detected, siphoning to siphon topic");
                 try {
                     kafkaProducerService.siphon(message);
                 } catch (Exception e) {

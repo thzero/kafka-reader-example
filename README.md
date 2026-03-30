@@ -8,7 +8,7 @@ A Spring Boot application that consumes messages from a Kafka input topic, appli
 
 1. **Consumes** JSON messages from a Kafka input topic using `read_committed` isolation (EOS consumer).
 2. **Deserializes** each message into a typed `KafkaMessage` envelope (`event` header + `body` payload).
-3. **Siphons** `BDE` event-type messages directly to a dedicated siphon topic and acks immediately — bypassing the delay, duplicate gate, and processing pipeline entirely.
+3. **Siphons** Backdated Endorsements (`eventType: END` + `backdated: true`) directly to a dedicated siphon topic and acks immediately — bypassing the delay, duplicate gate, and processing pipeline entirely.
 4. **Deduplicates** atomically — uses an in-memory `ConcurrentHashMap` gate on the consumer thread; restart/replay duplicates are caught by a unique constraint on `ReceivedRecord.messageId` on the worker thread.
 5. **Schedules** the remaining work on a `ScheduledExecutorService` with a configurable delay (default 20 seconds). The consumer thread returns immediately and is free to pull the next message — no blocking.
 6. **Processes** the message via `MessageProcessorService` (business logic stub; swap in your own implementation).
@@ -23,12 +23,11 @@ A Spring Boot application that consumes messages from a Kafka input topic, appli
 | Code | Name | Notes |
 |------|------|-------|
 | `NC`  | New Business | Standard new policy intake |
-| `END` | Endorsement | Policy modification. When `event.backdated: true`, this is a **Backdated Endorsement**. |
+| `END` | Endorsement | Policy modification. When `event.backdated: true`, this is a **Backdated Endorsement** — siphoned directly to `kafka.topic.siphon` on the consumer thread, bypassing the delay, duplicate gate, and processing pipeline. |
 | `TRM` | Termination | Policy cancellation/termination |
 | `RNW` | Renewal | Policy renewal |
-| `BDE` | Siphon | Forwarded as-is to `kafka.topic.siphon` on the consumer thread; bypasses the delay, processing pipeline, and duplicate gate |
 
-Backdated Endorsements are identified at the field level (`eventType: END` + `backdated: true`) rather than by a distinct event type code. This keeps the routing table simple — `END` always means endorsement; the `backdated` flag drives any special downstream handling.
+Backdated Endorsements are identified at the field level (`eventType: END` + `backdated: true`) rather than by a distinct event type code. This keeps the routing table simple — `END` always means endorsement; the `backdated` flag drives the siphon fast-path.
 
 ---
 
@@ -43,14 +42,14 @@ flowchart TD
     subgraph CL["KafkaConsumerListener — consumer thread (no DB calls)"]
         CL1["1. Deserialize JSON → KafkaMessage"]
         CL2["2. Set MDC (interactionId, messageId)"]
-        CL3["3. BDE? → siphon + ack"]
+    CL3["3. END+backdated? → siphon + ack"]
         CL4["4. inFlightIds.add(messageId)"]
         CL5["5. Capture MDC snapshot"]
         CL6["6. processingScheduler.schedule(delay=20s)"]
         CL1 --> CL2 --> CL3 --> CL4 --> CL5 --> CL6
     end
 
-    CL3 -->|"eventType == BDE"| ST([Siphon Topic])
+    CL3 -->|"END + backdated=true"| ST([Siphon Topic])
     CL3 -->|siphon failure| CL3
     CL4 -->|"already present (in-flight duplicate)"| DL
     CL6 -->|returns immediately| IT

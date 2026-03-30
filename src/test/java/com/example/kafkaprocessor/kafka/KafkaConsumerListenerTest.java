@@ -93,7 +93,7 @@ class KafkaConsumerListenerTest {
 
     @Test
     void bdeEvent_siphonsToSiphonTopic_acks() throws InterruptedException {
-        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"BDE\"},\"body\":{\"messageId\":\"msg-bde\"}}";
+        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"msg-bde\"}}";
 
         listener.listen(record(bdePayload), acknowledgment);
 
@@ -105,7 +105,7 @@ class KafkaConsumerListenerTest {
 
     @Test
     void bdeEvent_siphonFailure_noAck() throws InterruptedException {
-        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"BDE\"},\"body\":{\"messageId\":\"msg-bde\"}}";
+        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"msg-bde\"}}";
         doThrow(new KafkaPublishException("siphon failed", new RuntimeException()))
                 .when(kafkaProducerService).siphon(any());
 
