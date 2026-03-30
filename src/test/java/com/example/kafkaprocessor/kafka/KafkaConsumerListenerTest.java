@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -93,17 +92,26 @@ class KafkaConsumerListenerTest {
     }
 
     @Test
-    void duplicateMessage_uniqueConstraintViolation_routesToDeadLetter_acks() throws InterruptedException {
-        // Simulate the unique constraint on ReceivedRecord firing
-        doThrow(new DataIntegrityViolationException("unique constraint"))
-                .when(controlService).recordReceived(eq("msg-1"), any());
+    void duplicateMessage_inFlight_routesToDeadLetter_acks() throws InterruptedException {
+        // Use a mock scheduler so the first message's worker task is captured but never executed,
+        // keeping its messageId in the in-flight set when the second message arrives.
+        ScheduledExecutorService nonExecutingScheduler = mock(ScheduledExecutorService.class);
+        KafkaConsumerListener l = new KafkaConsumerListener(
+                objectMapper, controlService, messageProcessorService,
+                kafkaProducerService, deadLetterService, nonExecutingScheduler);
+        ReflectionTestUtils.setField(l, "processingDelayMs", 0L);
 
-        listener.listen(record(VALID_PAYLOAD), acknowledgment);
-        awaitScheduler();
+        Acknowledgment ack2 = mock(Acknowledgment.class);
+
+        // First arrival — accepted, scheduled (task never executes — mock scheduler)
+        l.listen(record(VALID_PAYLOAD), acknowledgment);
+        // Second arrival with same messageId — hits in-flight duplicate gate
+        l.listen(record(VALID_PAYLOAD), ack2);
 
         verify(deadLetterService).handle(eq(VALID_PAYLOAD), eq(ReasonCode.DUPLICATE), eq("msg-1"), eq("iid-1"));
-        verify(acknowledgment).acknowledge();
-        verifyNoInteractions(messageProcessorService, kafkaProducerService);
+        verify(ack2).acknowledge();
+        verify(acknowledgment, never()).acknowledge();
+        verifyNoInteractions(messageProcessorService, kafkaProducerService, controlService);
     }
 
     @Test

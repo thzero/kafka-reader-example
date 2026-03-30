@@ -27,8 +27,10 @@
   - Producer is configured as a **transactional producer** with a unique `transactional-id` per instance
   - The consumer-to-producer flow operates within a single Kafka transaction — the input read and output publish either both commit or both roll back
 - If a duplicate `messageId` is detected despite EOS (e.g., a replayed message), it must be routed to the Dead Letter Component with reason code `DUPLICATE`
-- Duplicate detection relies on a **unique database constraint** on `ReceivedRecord.messageId`; a `DataIntegrityViolationException` on insert means the message is a duplicate and is routed to the dead letter immediately — this is atomic and race-condition-free
-- The duplicate check and insert both happen on the **consumer thread** (before scheduling deferred work), so the consumer itself acts as the gatekeeper
+- Duplicate detection uses a **two-layer approach** to keep the consumer thread free of DB round-trips:
+  1. **In-memory gate (consumer thread)** — `ConcurrentHashMap.newKeySet()` holds all in-flight `messageId`s; `add()` returns `false` if already present, making in-flight duplicate detection a nanosecond operation with zero DB cost. The set is cleared on restart.
+  2. **DB unique constraint (worker thread)** — `ReceivedRecord` has a unique constraint on `message_id`. If the constraint fires (`DataIntegrityViolationException`) during `recordReceived()` on the worker thread, it means the app restarted mid-flight (in-memory state lost, row survived). Route to dead letter + ack.
+- The in-flight set is removed from in the worker's `finally` block — on success (allows explicit replay) and on failure (allows redelivery after no-ack)
 - To replay a failed message: delete its `ReceivedRecord` row, then replay the Kafka message; the constraint insert will succeed and the message will be processed normally
 
 ## Capabilities
@@ -44,8 +46,8 @@
 ### Message Processing
 - Message payloads are JSON; deserialization must be handled on ingest
 - Upon successful deserialization, the message is scheduled for deferred processing
-- When the consumer thread receives a message it first attempts to insert a **`ReceivedRecord`** via `ControlService.recordReceived()` — this happens on the consumer thread before scheduling. If the unique constraint fires (`DataIntegrityViolationException`), the message is routed to DUPLICATE dead letter and acknowledged; otherwise work is scheduled for deferred execution
-- When the worker thread fires and processing actually begins, processing proceeds — `RECEIVED` represents "processing started"; a `ReceivedRecord` with no matching `PublishedRecord` in reconciliation jobs indicates a genuine processing failure
+- When the consumer thread receives a message it first checks the **in-memory in-flight set** (`ConcurrentHashMap`) for the `messageId`; if already present it is a duplicate — route to DUPLICATE dead letter and ack. If not present, the ID is added to the set and the work is scheduled for deferred execution. No DB call happens on the consumer thread.
+- When the worker thread fires and processing actually begins, `ControlService.recordReceived()` is called first (DB INSERT with unique constraint), then processing proceeds — `RECEIVED` represents "processing started"; a `ReceivedRecord` with no matching `PublishedRecord` in reconciliation jobs indicates a genuine processing failure
 - Each message is processed independently and in a concurrent fashion
 - After successful processing, the message is serialized back to JSON and published to a configured Kafka output topic
 - Upon successful publish, the Control Component is invoked to write a `PUBLISHED` control record

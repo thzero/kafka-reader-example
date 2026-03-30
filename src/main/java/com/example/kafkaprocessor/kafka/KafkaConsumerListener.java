@@ -18,6 +18,8 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -32,6 +34,11 @@ public class KafkaConsumerListener {
     private final KafkaProducerService kafkaProducerService;
     private final DeadLetterService deadLetterService;
     private final ScheduledExecutorService processingScheduler;
+
+    // In-memory set of messageIds currently in-flight (consumer thread → worker thread).
+    // add() returns false if already present → duplicate detected in nanoseconds with no DB call.
+    // Cleared in the worker's finally block so redelivered messages can re-enter the pipeline.
+    private final Set<String> inFlightIds = ConcurrentHashMap.newKeySet();
 
     @Value("${app.processing.delay-ms:20000}")
     private long processingDelayMs;
@@ -71,22 +78,16 @@ public class KafkaConsumerListener {
         try {
             log.info("Message received");
 
-            // --- Duplicate check via unique constraint ---
-            // Attempt to INSERT the ReceivedRecord. If messageId already exists, the database
-            // unique constraint fires a DataIntegrityViolationException — no separate SELECT needed.
-            // This atomically closes the duplicate window, including messages still in-flight
-            // waiting out their delay. To replay a failed message, delete its ReceivedRecord first.
-            try {
-                controlService.recordReceived(messageId, interactionId);
-            } catch (DataIntegrityViolationException e) {
-                log.warn("Duplicate messageId detected via unique constraint, routing to dead letter");
+            // --- In-memory duplicate gate (nanosecond cost, no DB round-trip) ---
+            // ConcurrentHashMap.add() returns false if the messageId was already present, meaning
+            // this messageId is still in-flight (consumer delivered a duplicate within the delay window).
+            // This is purely in-memory; it is cleared on restart. Restart/replay duplicates are caught
+            // by the DB unique constraint on ReceivedRecord.message_id inside the worker thread.
+            if (messageId != null && !inFlightIds.add(messageId)) {
+                log.warn("Duplicate messageId detected in-flight, routing to dead letter");
                 deadLetterService.handle(rawPayload, ReasonCode.DUPLICATE, messageId, interactionId);
                 acknowledgment.acknowledge();
                 return;
-            } catch (Exception e) {
-                log.error("Failed to write RECEIVED control record", e);
-                deadLetterService.handle(rawPayload, ReasonCode.CONTROL_RECORD_ERROR, messageId, interactionId);
-                return; // no ack
             }
 
             // Capture MDC context so the scheduled worker thread can restore it.
@@ -120,6 +121,24 @@ public class KafkaConsumerListener {
             MdcContext.set(interactionId, messageId);
         }
         try {
+            // --- Write RECEIVED control record ---
+            // Done on the worker thread so the DB round-trip (Oracle/SQL Server) does not block
+            // the consumer thread. DataIntegrityViolationException here means the app restarted
+            // mid-flight — the in-memory set was lost but the ReceivedRecord row survived.
+            // Treat as a restart/replay duplicate: route to dead letter and ack.
+            try {
+                controlService.recordReceived(messageId, interactionId);
+            } catch (DataIntegrityViolationException e) {
+                log.warn("ReceivedRecord already exists (restart/replay duplicate), routing to dead letter");
+                deadLetterService.handle(rawPayload, ReasonCode.DUPLICATE, messageId, interactionId);
+                acknowledgment.acknowledge();
+                return;
+            } catch (Exception e) {
+                log.error("Failed to write RECEIVED control record", e);
+                deadLetterService.handle(rawPayload, ReasonCode.CONTROL_RECORD_ERROR, messageId, interactionId);
+                return; // no ack
+            }
+
             // --- Process ---
             KafkaMessage processed;
             try {
@@ -152,6 +171,12 @@ public class KafkaConsumerListener {
             acknowledgment.acknowledge();
 
         } finally {
+            // Always release the in-flight slot:
+            // - On success: clears the slot after ack so an explicit replay can re-enter.
+            // - On failure (no-ack): frees the slot so the redelivered message can re-enter.
+            if (messageId != null) {
+                inFlightIds.remove(messageId);
+            }
             MdcContext.clear();
         }
     }

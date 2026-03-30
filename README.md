@@ -21,49 +21,47 @@ A Spring Boot application that consumes messages from a Kafka input topic, appli
 
 ### Component Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Kafka Cluster                                                       │
-│  ┌─────────────┐                         ┌─────────────────────┐   │
-│  │ Input Topic │                         │   Output Topic      │   │
-│  └──────┬──────┘                         └─────────────────────┘   │
-└─────────┼───────────────────────────────────────────┬──────────────┘
-          │                                           │ publish (transactional)
-          ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  KafkaConsumerListener (consumer thread)                            │
-│                                                                     │
-│  1. Deserialize JSON → KafkaMessage                                 │
-│  2. Set MDC (interactionId, messageId)                              │
-│  3. ControlService.recordReceived()  ──► H2: INSERT received_record │
-│       DataIntegrityViolationException? → DUPLICATE dead letter + ack│
-│  4. Capture MDC snapshot                                            │
-│  5. processingScheduler.schedule(delay=20s) → return immediately    │
-└─────────────────────────────────────────────────────────────────────┘
-          │ after delay fires
-          ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Worker Thread (ScheduledExecutorService)                           │
-│                                                                     │
-│  1. Restore MDC from snapshot                                       │
-│  2. MessageProcessorService.process()   → PROCESSING_ERROR          │
-│  3. KafkaProducerService.publish()      → PUBLISH_ERROR             │
-│  4. ControlService.recordPublished()    → H2: INSERT published_record│
-│  5. Acknowledgment.acknowledge()                                     │
-└─────────────────────────────────────────────────────────────────────┘
-          │ any failure at steps 2–4
-          ▼
-┌──────────────────────────┐
-│  DeadLetterService       │
-│  H2: dead_letter_record  │
-│  (rawPayload, reasonCode,│
-│   messageId, failedAt)   │
-└──────────────────────────┘
+```mermaid
+flowchart TD
+    IT([Input Topic]) -->|consume| CL
+
+    subgraph CL["KafkaConsumerListener — consumer thread (no DB calls)"]
+        CL1["1. Deserialize JSON → KafkaMessage"]
+        CL2["2. Set MDC (interactionId, messageId)"]
+        CL3["3. inFlightIds.add(messageId)"]
+        CL4["4. Capture MDC snapshot"]
+        CL5["5. processingScheduler.schedule(delay=20s)"]
+        CL1 --> CL2 --> CL3 --> CL4 --> CL5
+    end
+
+    CL3 -->|"already present (in-flight duplicate)"| DL
+    CL5 -->|returns immediately| IT
+
+    subgraph WT["Worker Thread — ScheduledExecutorService"]
+        WT0["0. Restore MDC from snapshot"]
+        WT1["1. ControlService.recordReceived()"]
+        WT2["2. MessageProcessorService.process()"]
+        WT3["3. KafkaProducerService.publish()"]
+        WT4["4. ControlService.recordPublished()"]
+        WT5["5. Acknowledgment.acknowledge()"]
+        WT6["finally: inFlightIds.remove()"]
+        WT0 --> WT1 --> WT2 --> WT3 --> WT4 --> WT5 --> WT6
+    end
+
+    CL5 -->|after delay| WT
+    WT1 -->|INSERT ok| RR[(received_record\nDB)]
+    WT1 -->|"DataIntegrityViolationException\n(restart/replay duplicate)"| DL
+    WT3 -->|publish transactional| OT([Output Topic])
+    WT4 --> PR[(published_record\nDB)]
+    WT2 -->|ProcessingException| DL
+    WT3 -->|KafkaPublishException| DL
+    WT4 -->|Exception| DL
+
+    DL["DeadLetterService"]
+    DL --> DLR[(dead_letter_record\nDB)]
 ```
 
 ### Concurrency Flow
-
-Paste the diagram below into [mermaid.live](https://mermaid.live) to render it.
 
 ```mermaid
 sequenceDiagram
@@ -76,55 +74,67 @@ sequenceDiagram
     Note over K,CT: Messages arrive continuously
 
     K->>CT: Message A (T=0)
-    CT->>DB: Deserialize + Duplicate check + Write RECEIVED
+    CT->>CT: Deserialize + in-memory duplicate check (ConcurrentHashMap)
     CT->>SE: schedule(processA, delay=20s)
     CT-->>K: returns immediately
 
     K->>CT: Message B (T=1s)
-    CT->>DB: Deserialize + Duplicate check + Write RECEIVED
+    CT->>CT: Deserialize + in-memory duplicate check (ConcurrentHashMap)
     CT->>SE: schedule(processB, delay=20s)
     CT-->>K: returns immediately
 
     K->>CT: Message C (T=2s)
-    CT->>DB: Deserialize + Duplicate check + Write RECEIVED
+    CT->>CT: Deserialize + in-memory duplicate check (ConcurrentHashMap)
     CT->>SE: schedule(processC, delay=20s)
     CT-->>K: returns immediately
 
     Note over SE: A, B, C all waiting simultaneously on separate worker threads
 
-    SE->>SE: Message A fires (T=20s) — restore MDC, business logic
+    SE->>SE: Message A fires (T=20s) — restore MDC
+    SE->>DB: Write RECEIVED (A)
+    SE->>SE: Business logic
     SE->>OP: Publish A
     SE->>DB: Write PUBLISHED (A)
     SE-->>K: Acknowledge offset A
 
-    SE->>SE: Message B fires (T=21s) — restore MDC, business logic
+    SE->>SE: Message B fires (T=21s) — restore MDC
+    SE->>DB: Write RECEIVED (B)
+    SE->>SE: Business logic
     SE->>OP: Publish B
     SE->>DB: Write PUBLISHED (B)
     SE-->>K: Acknowledge offset B
 
-    SE->>SE: Message C fires (T=22s) — restore MDC, business logic
+    SE->>SE: Message C fires (T=22s) — restore MDC
+    SE->>DB: Write RECEIVED (C)
+    SE->>SE: Business logic
     SE->>OP: Publish C
     SE->>DB: Write PUBLISHED (C)
     SE-->>K: Acknowledge offset C
 ```
 
 **Key points:**
-- The **consumer thread is never blocked** — fast operations only (deserialize, duplicate check, write RECEIVED, schedule), then returns immediately
+- The **consumer thread makes zero DB calls** — fast operations only (deserialize, nanosecond in-memory duplicate check, schedule), then returns immediately
 - **All messages are in-flight simultaneously**, each with their own independent 20-second countdown on a separate worker thread
 - The **worker thread pool** is sized to the maximum expected in-flight messages: `msg/sec × delay-ms / 1000` (e.g., 12 msg/sec × 20s = 240 threads)
 - **Acknowledgment happens on the worker thread** after the full pipeline completes — Kafka does not advance the offset until then
-- If the app restarts mid-flight, un-acked messages are redelivered; the unique constraint on `ReceivedRecord.message_id` detects the duplicate INSERT and routes to dead letter safely
+- If the app restarts mid-flight, un-acked messages are redelivered; the unique constraint on `ReceivedRecord.message_id` catches restart/replay duplicates on the worker thread
 
 ---
 
 ## Duplicate Detection
 
-Duplicate detection is handled atomically via a **database unique constraint** on `received_record.message_id`:
+Duplicate detection uses two layers so the consumer thread never touches the database:
 
-- When a message arrives, the consumer thread attempts to `INSERT` a `ReceivedRecord` using `saveAndFlush()`.
-- If the `messageId` has already been seen, the database fires a `DataIntegrityViolationException` — no separate `SELECT` query needed, no TOCTOU race condition.
-- The consumer catches this exception, routes the message to the dead letter store with `DUPLICATE`, and acknowledges the offset.
-- Messages still waiting out their 20-second delay are also protected — the constraint fires regardless of whether the first copy has finished processing.
+**Layer 1 — In-memory gate (consumer thread, nanosecond cost):**
+- A `ConcurrentHashMap.newKeySet()` holds all `messageId`s currently in-flight.
+- `add()` returns `false` if already present — the message is a duplicate within the 20-second delay window.
+- Route to dead letter with `DUPLICATE` and ack immediately. No DB call, no round-trip.
+- The set entry is removed in the worker's `finally` block (on success and on failure), so redelivered messages can re-enter the pipeline.
+
+**Layer 2 — DB unique constraint (worker thread, restart/replay safety):**
+- `ReceivedRecord` has a unique constraint on `message_id`.
+- On app restart, the in-memory set is empty. When an un-acked message is redelivered, it passes Layer 1 but the DB constraint fires a `DataIntegrityViolationException` on the worker thread.
+- Route to dead letter with `DUPLICATE` and ack.
 
 **To replay a failed message:** delete its row from `received_record`, then replay the Kafka message. The INSERT will succeed and the message will process normally.
 
@@ -135,7 +145,7 @@ Duplicate detection is handled atomically via a **database unique constraint** o
 | Code | Trigger |
 |------|---------|
 | `DESERIALIZATION_ERROR` | Message payload is not valid JSON or does not match the expected schema |
-| `DUPLICATE` | `messageId` already exists in `received_record` (unique constraint violation) |
+| `DUPLICATE` | `messageId` already in the in-flight set (same-instance duplicate during delay window), or `DataIntegrityViolationException` from the DB unique constraint (restart/replay duplicate) |
 | `CONTROL_RECORD_ERROR` | Unexpected failure writing the `ReceivedRecord` (not a constraint violation) |
 | `PROCESSING_ERROR` | `MessageProcessorService.process()` threw an exception |
 | `PUBLISH_ERROR` | `KafkaProducerService.publish()` threw an exception |

@@ -161,13 +161,10 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
    - Receives raw `String` payload (preserves original for dead letter use)
    - Manually deserializes to `KafkaMessage` via `ObjectMapper`
    - Sets MDC (`interactionId`, `messageId`)
-   - **Calls `ControlService.recordReceived(...)` on the consumer thread** — if `DataIntegrityViolationException` is thrown, the message is a duplicate; route to `DeadLetterService` with `ReasonCode.DUPLICATE`, call `Acknowledgment.acknowledge()`, and return. Any other exception routes to `CONTROL_RECORD_ERROR` dead letter without ack.
-   - Captures MDC context snapshot (MDC is thread-local; the worker thread must restore it)
-   - **Schedules** the remaining work (process → publish → recordPublished → ack) via `ScheduledExecutorService` with `app.processing.delay-ms` delay — consumer thread returns immediately
-   - The scheduled worker: restores MDC, calls `MessageProcessorService.process(...)`, calls `KafkaProducerService.publish(...)`, calls `ControlService.recordPublished(...)`, calls `Acknowledgment.acknowledge()` only on full success
-   - A `ReceivedRecord` with no matching `PublishedRecord` indicates a processing failure — useful for reconciliation jobs
-   - Wraps every stage in try/catch; routes to `DeadLetterService` with `ReasonCode` on failure
-   - Clears MDC in `finally` block on both the consumer thread and the worker thread
+   - **In-flight duplicate gate**: `inFlightIds = ConcurrentHashMap.newKeySet()` field on the listener; `add()` returns false if already present — nanosecond check, no DB call on consumer thread. ID is removed in worker `finally` block.
+   - **Restart/replay duplicate gate**: worker thread calls `controlService.recordReceived()` first; if `DataIntegrityViolationException` fires (in-memory set was lost on restart, row survived), route to dead letter + ack.
+   - Consumer thread flow: deserialize → MDC → `inFlightIds.add()` (duplicate? dead letter + ack) → capture MDC snapshot → `processingScheduler.schedule(delay)` → return immediately
+   - Worker thread flow: restore MDC → `recordReceived()` → process → publish → `recordPublished()` → ack → `inFlightIds.remove()` (in finally)
 
 **Package:** `com.example.kafkaprocessor.kafka`
 
@@ -232,9 +229,9 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 2. *(parallel)* Unit test `DeadLetterServiceImpl` — verify record persisted with correct
    `reasonCode`, `rawPayload`, timestamps
 3. *(parallel)* Unit test `KafkaConsumerListener` with mocked dependencies:
-   - Happy path: MDC set, `recordReceived` called, publish called, `recordPublished` called, ack sent
+   - Happy path: MDC set, `recordReceived` called (on worker), publish called, `recordPublished` called, ack sent
    - Deserialization failure → `DESERIALIZATION_ERROR`, no ack
-   - Duplicate `messageId` — `controlService.recordReceived()` throws `DataIntegrityViolationException` → `DUPLICATE`, ack and discard
+   - Duplicate `messageId` in-flight — `listen()` called twice with same messageId while first is still scheduled (mock scheduler prevents execution) → `DUPLICATE`, ack and discard
    - Processing failure → `PROCESSING_ERROR`, no ack
    - Processing delay applied — assert message is scheduled with configured `app.processing.delay-ms` and that process/publish/ack run after the delay fires
    - Publish failure → `PUBLISH_ERROR`, no ack
