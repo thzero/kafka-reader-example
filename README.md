@@ -18,6 +18,20 @@ A Spring Boot application that consumes messages from a Kafka input topic, appli
 
 ---
 
+## Event Types
+
+| Code | Name | Notes |
+|------|------|-------|
+| `NC`  | New Business | Standard new policy intake |
+| `END` | Endorsement | Policy modification. When `event.backdated: true`, this is a **Backdated Endorsement**. |
+| `TRM` | Termination | Policy cancellation/termination |
+| `RNW` | Renewal | Policy renewal |
+| `BDE` | Siphon | Forwarded as-is to `kafka.topic.siphon` on the consumer thread; bypasses the delay, processing pipeline, and duplicate gate |
+
+Backdated Endorsements are identified at the field level (`eventType: END` + `backdated: true`) rather than by a distinct event type code. This keeps the routing table simple — `END` always means endorsement; the `backdated` flag drives any special downstream handling.
+
+---
+
 ## Architecture
 
 ### Component Overview

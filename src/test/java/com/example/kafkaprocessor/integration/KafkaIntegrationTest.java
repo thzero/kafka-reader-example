@@ -79,7 +79,7 @@ class KafkaIntegrationTest {
 
         // Act: publish a message to the input topic
         KafkaMessage inputMessage = new KafkaMessage(
-                new EventHeader("iid-integration", "TEST"),
+                new EventHeader("iid-integration", "TEST", null),
                 new MessageBody("msg-integration"));
         String payload = objectMapper.writeValueAsString(inputMessage);
 

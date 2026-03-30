@@ -5,6 +5,7 @@ import com.example.kafkaprocessor.deadletter.DeadLetterService;
 import com.example.kafkaprocessor.deadletter.ReasonCode;
 import com.example.kafkaprocessor.logging.MdcContext;
 import com.example.kafkaprocessor.model.KafkaMessage;
+import com.example.kafkaprocessor.model.EventType;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -81,7 +82,7 @@ public class KafkaConsumerListener {
             // --- BDE siphon (fast-path before any other processing) ---
             // BDE messages are forwarded as-is to the siphon topic and acked immediately.
             // They bypass the delay, duplicate gate, and processing pipeline.
-            if (message.event() != null && "BDE".equals(message.event().eventType())) {
+            if (message.event() != null && EventType.BDE.equals(message.event().eventType())) {
                 log.info("BDE event type detected, siphoning to siphon topic");
                 try {
                     kafkaProducerService.siphon(message);

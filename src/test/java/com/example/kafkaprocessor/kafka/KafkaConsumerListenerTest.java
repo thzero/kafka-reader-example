@@ -67,7 +67,7 @@ class KafkaConsumerListenerTest {
     @Test
     void happyPath_writesControlRecords_publishesAndAcks() throws InterruptedException {
         KafkaMessage processed = new KafkaMessage(
-                new EventHeader("iid-1", "TEST"), new MessageBody("msg-1"));
+                new EventHeader("iid-1", "TEST", null), new MessageBody("msg-1"));
         when(messageProcessorService.process(any())).thenReturn(processed);
 
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
@@ -153,7 +153,7 @@ class KafkaConsumerListenerTest {
     @Test
     void publishFailure_routesToDeadLetter_noAck() throws InterruptedException {
         KafkaMessage processed = new KafkaMessage(
-                new EventHeader("iid-1", "TEST"), new MessageBody("msg-1"));
+                new EventHeader("iid-1", "TEST", null), new MessageBody("msg-1"));
         when(messageProcessorService.process(any())).thenReturn(processed);
         doThrow(new KafkaPublishException("publish failed", new RuntimeException()))
                 .when(kafkaProducerService).publish(any());

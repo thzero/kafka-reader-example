@@ -10,11 +10,22 @@
 - Every message is a JSON envelope with two top-level properties:
   - **`event`** — header/metadata object containing:
     - `interactionId` — unique identifier for the interaction; used as the correlation ID for all logging
-    - `eventType` — the type/category of the event
+    - `eventType` — the type/category of the event; see known event types below
+    - `backdated` — optional boolean flag; when `true` combined with `eventType: END`, the message is a **Backdated Endorsement**
   - **`body`** — payload object containing:
     - `messageId` — unique identifier for the message; used in control records and dead letter records
 - Both `event` and `body` must be deserialized into strongly-typed Java objects
 - `interactionId` must be propagated through the entire processing lifecycle (logging, control records, dead letter)
+
+### Event Types
+
+| Code | Name | Notes |
+|------|------|-------|
+| `NC`  | New Business | Standard new policy intake |
+| `END` | Endorsement | Policy modification; if `backdated=true` this is a **Backdated Endorsement** |
+| `TRM` | Termination | Policy cancellation/termination |
+| `RNW` | Renewal | Policy renewal |
+| `BDE` | Siphon | Routed directly to the siphon topic on the consumer thread; bypasses all processing |
 
 ### Throughput & Scalability
 - Must sustain a minimum of 1,000,000 messages per day (~12 msg/sec average; must handle burst capacity above this)
