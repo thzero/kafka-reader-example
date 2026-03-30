@@ -78,6 +78,21 @@ public class KafkaConsumerListener {
         try {
             log.info("Message received");
 
+            // --- BDE siphon (fast-path before any other processing) ---
+            // BDE messages are forwarded as-is to the siphon topic and acked immediately.
+            // They bypass the delay, duplicate gate, and processing pipeline.
+            if (message.event() != null && "BDE".equals(message.event().eventType())) {
+                log.info("BDE event type detected, siphoning to siphon topic");
+                try {
+                    kafkaProducerService.siphon(message);
+                } catch (Exception e) {
+                    log.error("Siphon publish failed", e);
+                    return; // no ack — redelivery
+                }
+                acknowledgment.acknowledge();
+                return;
+            }
+
             // --- In-memory duplicate gate (nanosecond cost, no DB round-trip) ---
             // ConcurrentHashMap.add() returns false if the messageId was already present, meaning
             // this messageId is still in-flight (consumer delivered a duplicate within the delay window).

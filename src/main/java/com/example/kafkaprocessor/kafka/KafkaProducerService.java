@@ -17,6 +17,9 @@ public class KafkaProducerService {
     @Value("${kafka.topic.output}")
     private String outputTopic;
 
+    @Value("${kafka.topic.siphon}")
+    private String siphonTopic;
+
     public KafkaProducerService(KafkaTemplate<String, KafkaMessage> kafkaTemplate) {
         this.kafkaTemplate = kafkaTemplate;
     }
@@ -35,5 +38,21 @@ public class KafkaProducerService {
         });
 
         log.info("Publish succeeded messageId={} interactionId={}", messageId, interactionId);
+    }
+
+    public void siphon(KafkaMessage message) {
+        String messageId = message.body() != null ? message.body().messageId() : null;
+        String interactionId = message.event() != null ? message.event().interactionId() : null;
+
+        kafkaTemplate.executeInTransaction(ops -> {
+            ops.send(siphonTopic, messageId, message).whenComplete((result, ex) -> {
+                if (ex != null) {
+                    throw new KafkaPublishException("Failed to siphon message: " + messageId, ex);
+                }
+            });
+            return null;
+        });
+
+        log.info("Siphon succeeded messageId={} interactionId={}", messageId, interactionId);
     }
 }

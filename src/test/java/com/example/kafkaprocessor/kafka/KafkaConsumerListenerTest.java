@@ -92,6 +92,30 @@ class KafkaConsumerListenerTest {
     }
 
     @Test
+    void bdeEvent_siphonsToSiphonTopic_acks() throws InterruptedException {
+        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"BDE\"},\"body\":{\"messageId\":\"msg-bde\"}}";
+
+        listener.listen(record(bdePayload), acknowledgment);
+
+        verify(kafkaProducerService).siphon(any());
+        verify(acknowledgment).acknowledge();
+        verifyNoInteractions(controlService, messageProcessorService, deadLetterService);
+        verify(kafkaProducerService, never()).publish(any());
+    }
+
+    @Test
+    void bdeEvent_siphonFailure_noAck() throws InterruptedException {
+        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"BDE\"},\"body\":{\"messageId\":\"msg-bde\"}}";
+        doThrow(new KafkaPublishException("siphon failed", new RuntimeException()))
+                .when(kafkaProducerService).siphon(any());
+
+        listener.listen(record(bdePayload), acknowledgment);
+
+        verify(acknowledgment, never()).acknowledge();
+        verifyNoInteractions(controlService, messageProcessorService, deadLetterService);
+    }
+
+    @Test
     void duplicateMessage_inFlight_routesToDeadLetter_acks() throws InterruptedException {
         // Use a mock scheduler so the first message's worker task is captured but never executed,
         // keeping its messageId in the in-flight set when the second message arrives.

@@ -30,6 +30,8 @@ kafka:
     input: input-topic
     # Topic this application publishes processed messages to
     output: output-topic
+    # Topic BDE event-type messages are siphoned to without delay or further processing
+    siphon: siphon-topic
 
   producer:
     # Transactional ID prefix for exactly-once semantics (EOS).
