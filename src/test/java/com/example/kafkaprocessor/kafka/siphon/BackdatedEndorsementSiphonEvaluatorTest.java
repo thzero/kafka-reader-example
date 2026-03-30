@@ -6,41 +6,45 @@ import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.model.MessageBody;
 import org.junit.jupiter.api.Test;
 
+import java.util.Optional;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class BackdatedEndorsementSiphonEvaluatorTest {
 
-    private final SiphonEvaluator evaluator = new BackdatedEndorsementSiphonEvaluator();
+    private static final String TOPIC = "siphon-topic";
+    private final SiphonEvaluator evaluator = new BackdatedEndorsementSiphonEvaluator(TOPIC);
 
     private KafkaMessage message(String eventType, Boolean backdated) {
         return new KafkaMessage(new EventHeader("iid", eventType, backdated), new MessageBody("msg-1"));
     }
 
     @Test
-    void endAndBackdatedTrue_returnTrue() {
-        assertThat(evaluator.shouldSiphon(message(EventType.END, true))).isTrue();
+    void endAndBackdatedTrue_returnsTopicName() {
+        assertThat(evaluator.evaluate(message(EventType.END, true)))
+                .isEqualTo(Optional.of(TOPIC));
     }
 
     @Test
-    void endAndBackdatedFalse_returnFalse() {
-        assertThat(evaluator.shouldSiphon(message(EventType.END, false))).isFalse();
+    void endAndBackdatedFalse_returnsEmpty() {
+        assertThat(evaluator.evaluate(message(EventType.END, false))).isEmpty();
     }
 
     @Test
-    void endAndBackdatedNull_returnFalse() {
-        assertThat(evaluator.shouldSiphon(message(EventType.END, null))).isFalse();
+    void endAndBackdatedNull_returnsEmpty() {
+        assertThat(evaluator.evaluate(message(EventType.END, null))).isEmpty();
     }
 
     @Test
-    void nonEndEventType_backdatedTrue_returnFalse() {
-        assertThat(evaluator.shouldSiphon(message(EventType.NC, true))).isFalse();
-        assertThat(evaluator.shouldSiphon(message(EventType.TRM, true))).isFalse();
-        assertThat(evaluator.shouldSiphon(message(EventType.RNW, true))).isFalse();
+    void nonEndEventType_backdatedTrue_returnsEmpty() {
+        assertThat(evaluator.evaluate(message(EventType.NC, true))).isEmpty();
+        assertThat(evaluator.evaluate(message(EventType.TRM, true))).isEmpty();
+        assertThat(evaluator.evaluate(message(EventType.RNW, true))).isEmpty();
     }
 
     @Test
-    void nullEvent_returnFalse() {
+    void nullEvent_returnsEmpty() {
         KafkaMessage msg = new KafkaMessage(null, new MessageBody("msg-1"));
-        assertThat(evaluator.shouldSiphon(msg)).isFalse();
+        assertThat(evaluator.evaluate(msg)).isEmpty();
     }
 }

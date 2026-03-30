@@ -6,6 +6,8 @@ import com.example.kafkaprocessor.deadletter.ReasonCode;
 import com.example.kafkaprocessor.logging.MdcContext;
 import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
+
+import java.util.Optional;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -82,13 +84,14 @@ public class KafkaConsumerListener {
         try {
             log.info("Message received");
 
-            // --- Backdated Endorsement siphon (fast-path before any other processing) ---
-            // Delegated to SiphonEvaluator so the trigger criteria can be replaced or extended
-            // without modifying this class. The default implementation matches END + backdated=true.
-            if (siphonEvaluator.shouldSiphon(message)) {
-                log.info("Backdated Endorsement detected, siphoning to siphon topic");
+            // --- Siphon fast-path (before any other processing) ---
+            // SiphonEvaluator returns the target topic name, or empty to continue normally.
+            // Adding a new siphon route means adding a new evaluator — no changes here.
+            Optional<String> siphonTopic = siphonEvaluator.evaluate(message);
+            if (siphonTopic.isPresent()) {
+                log.info("Siphon triggered, routing to topic={}", siphonTopic.get());
                 try {
-                    kafkaProducerService.siphon(message);
+                    kafkaProducerService.siphon(message, siphonTopic.get());
                 } catch (Exception e) {
                     log.error("Siphon publish failed", e);
                     return; // no ack — redelivery
