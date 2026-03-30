@@ -45,8 +45,9 @@
 
 ### Message Processing
 - Message payloads are JSON; deserialization must be handled on ingest
-- Upon successful deserialization, the message is scheduled for deferred processing
-- When the consumer thread receives a message it first checks the **in-memory in-flight set** (`ConcurrentHashMap`) for the `messageId`; if already present it is a duplicate — route to DUPLICATE dead letter and ack. If not present, the ID is added to the set and the work is scheduled for deferred execution. No DB call happens on the consumer thread.
+- Upon successful deserialization, the message is checked for a **BDE event type siphon** before any other processing
+- If `event.eventType == "BDE"`, the message is published as-is to `kafka.topic.siphon` and acked immediately; it **bypasses the delay, duplicate gate, and processing pipeline entirely**. A siphon publish failure returns without ack (triggers redelivery).
+- When the consumer thread receives a non-BDE message it first checks the **in-memory in-flight set** (`ConcurrentHashMap`) for the `messageId`; if already present it is a duplicate — route to DUPLICATE dead letter and ack. If not present, the ID is added to the set and the work is scheduled for deferred execution. No DB call happens on the consumer thread.
 - When the worker thread fires and processing actually begins, `ControlService.recordReceived()` is called first (DB INSERT with unique constraint), then processing proceeds — `RECEIVED` represents "processing started"; a `ReceivedRecord` with no matching `PublishedRecord` in reconciliation jobs indicates a genuine processing failure
 - Each message is processed independently and in a concurrent fashion
 - After successful processing, the message is serialized back to JSON and published to a configured Kafka output topic

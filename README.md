@@ -8,12 +8,13 @@ A Spring Boot application that consumes messages from a Kafka input topic, appli
 
 1. **Consumes** JSON messages from a Kafka input topic using `read_committed` isolation (EOS consumer).
 2. **Deserializes** each message into a typed `KafkaMessage` envelope (`event` header + `body` payload).
-3. **Deduplicates** atomically — attempts to INSERT a `ReceivedRecord` with a unique constraint on `messageId`; a constraint violation means the message was already seen and it is immediately routed to the dead letter queue.
-4. **Schedules** the remaining work on a `ScheduledExecutorService` with a configurable delay (default 20 seconds). The consumer thread returns immediately and is free to pull the next message — no blocking.
-5. **Processes** the message via `MessageProcessorService` (business logic stub; swap in your own implementation).
-6. **Publishes** the result to a Kafka output topic via a transactional producer.
-7. **Acknowledges** the input offset only after the full pipeline succeeds.
-8. Routes any failure to the **dead letter** store with a typed `reasonCode`.
+3. **Siphons** `BDE` event-type messages directly to a dedicated siphon topic and acks immediately — bypassing the delay, duplicate gate, and processing pipeline entirely.
+4. **Deduplicates** atomically — uses an in-memory `ConcurrentHashMap` gate on the consumer thread; restart/replay duplicates are caught by a unique constraint on `ReceivedRecord.messageId` on the worker thread.
+5. **Schedules** the remaining work on a `ScheduledExecutorService` with a configurable delay (default 20 seconds). The consumer thread returns immediately and is free to pull the next message — no blocking.
+6. **Processes** the message via `MessageProcessorService` (business logic stub; swap in your own implementation).
+7. **Publishes** the result to a Kafka output topic via a transactional producer.
+8. **Acknowledges** the input offset only after the full pipeline succeeds.
+9. Routes any failure to the **dead letter** store with a typed `reasonCode`.
 
 ---
 
@@ -28,14 +29,17 @@ flowchart TD
     subgraph CL["KafkaConsumerListener — consumer thread (no DB calls)"]
         CL1["1. Deserialize JSON → KafkaMessage"]
         CL2["2. Set MDC (interactionId, messageId)"]
-        CL3["3. inFlightIds.add(messageId)"]
-        CL4["4. Capture MDC snapshot"]
-        CL5["5. processingScheduler.schedule(delay=20s)"]
-        CL1 --> CL2 --> CL3 --> CL4 --> CL5
+        CL3["3. BDE? → siphon + ack"]
+        CL4["4. inFlightIds.add(messageId)"]
+        CL5["5. Capture MDC snapshot"]
+        CL6["6. processingScheduler.schedule(delay=20s)"]
+        CL1 --> CL2 --> CL3 --> CL4 --> CL5 --> CL6
     end
 
-    CL3 -->|"already present (in-flight duplicate)"| DL
-    CL5 -->|returns immediately| IT
+    CL3 -->|"eventType == BDE"| ST([Siphon Topic])
+    CL3 -->|siphon failure| CL3
+    CL4 -->|"already present (in-flight duplicate)"| DL
+    CL6 -->|returns immediately| IT
 
     subgraph WT["Worker Thread — ScheduledExecutorService"]
         WT0["0. Restore MDC from snapshot"]
@@ -48,7 +52,7 @@ flowchart TD
         WT0 --> WT1 --> WT2 --> WT3 --> WT4 --> WT5 --> WT6
     end
 
-    CL5 -->|after delay| WT
+    CL6 -->|after delay| WT
     WT1 -->|INSERT ok| RR[(received_record\nDB)]
     WT1 -->|"DataIntegrityViolationException\n(restart/replay duplicate)"| DL
     WT3 -->|publish transactional| OT([Output Topic])
@@ -113,7 +117,7 @@ sequenceDiagram
 ```
 
 **Key points:**
-- The **consumer thread makes zero DB calls** — fast operations only (deserialize, nanosecond in-memory duplicate check, schedule), then returns immediately
+- The **consumer thread makes zero DB calls** — fast operations only (deserialize, BDE siphon check, nanosecond in-memory duplicate check, schedule), then returns immediately
 - **All messages are in-flight simultaneously**, each with their own independent 20-second countdown on a separate worker thread
 - The **worker thread pool** is sized to the maximum expected in-flight messages: `msg/sec × delay-ms / 1000` (e.g., 12 msg/sec × 20s = 240 threads)
 - **Acknowledgment happens on the worker thread** after the full pipeline completes — Kafka does not advance the offset until then
@@ -210,6 +214,7 @@ kafka:
   topic:
     input: input-topic
     output: output-topic
+    siphon: siphon-topic    # BDE event-type messages are forwarded here without delay
 
 server:
   port: 8080
