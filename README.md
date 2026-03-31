@@ -391,14 +391,60 @@ src/test/java/com/example/kafkaprocessor/
 
 Requires Java 21, Docker Desktop, and Gradle on your PATH (or use the absolute path — see `gen-messages.cmd`).
 
-### 1. Start Kafka + Kafka UI
+### 1. Start the local stack
 
 ```bash
 docker compose up -d
 ```
 
-- Kafka broker: `localhost:9092`
-- Kafka UI: http://localhost:8081 — browse all topics, consumer groups, and offsets
+This starts four services:
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Kafka broker | `localhost:9092` | — |
+| Kafka UI | http://localhost:8081 | — |
+| Prometheus | http://localhost:9090 | — |
+| Grafana | http://localhost:3000 | admin / admin |
+
+**Kafka UI** (`http://localhost:8081`) — browse topics, consumer group lag, and individual messages.
+
+**Prometheus** (`http://localhost:9090`) — raw metric store. Scrapes `/actuator/prometheus` on the running app every 5 seconds. Use the **Graph** tab to run ad-hoc PromQL queries.
+
+**Grafana** (`http://localhost:3000`) — dashboards and alerting. Prometheus is auto-provisioned as the default datasource on first start — no manual setup needed.
+
+#### Using Grafana
+
+1. Open http://localhost:3000 and log in with `admin` / `admin`
+2. Go to **Explore** (compass icon in the left sidebar) — the Prometheus datasource is pre-selected
+3. Enter a PromQL query and click **Run query**
+
+Useful queries:
+
+```promql
+# P95 end-to-end latency over the last minute (includes processing delay)
+histogram_quantile(0.95, rate(kafka_processor_e2e_latency_seconds_bucket[1m]))
+
+# P95 pipeline execution latency (code only, excludes delay)
+histogram_quantile(0.95, rate(kafka_processor_pipeline_latency_seconds_bucket[1m]))
+
+# Message throughput per second (published)
+rate(kafka_processor_messages_published_total[1m])
+
+# Dead letter rate by reason code
+rate(kafka_processor_messages_failed_total[1m])
+
+# Current in-flight estimate
+kafka_processor_messages_received_total - kafka_processor_messages_published_total - kafka_processor_messages_failed_total
+```
+
+To build a dashboard: **Dashboards → New → Add visualization**, paste a query, and save.
+
+#### Stopping the stack
+
+```bash
+docker compose down        # stop containers, keep volumes
+docker compose down -v     # stop containers AND delete all data
+```
 
 ### 2. Build and run all tests
 
@@ -408,9 +454,30 @@ gradle test
 
 ### 3. Run the application
 
+The active Spring profile controls which metrics backend is used:
+
+| Profile | Where | How metrics are exported |
+|---------|-------|--------------------------|
+| `prometheus` *(default)* | Home / local | `/actuator/prometheus` scraped by local Docker Prometheus |
+| `datadog` | Work | Pushed to Datadog API every 10s — requires `DD_API_KEY` |
+
+**Local (Prometheus — default):**
 ```bash
 gradle bootRun
 ```
+
+**Work (Datadog):**
+```powershell
+$env:DD_API_KEY = "your-api-key"
+$env:SPRING_PROFILES_ACTIVE = "datadog"
+gradle bootRun
+```
+Or as a one-liner:
+```bash
+DD_API_KEY=your-api-key gradle bootRun --args='--spring.profiles.active=datadog'
+```
+
+The `kafka.processor.*` counters and timers appear in Datadog automatically under those metric names. The `/actuator/prometheus` endpoint is only available under the `prometheus` profile.
 
 ### 4. Generate test messages
 
@@ -465,15 +532,30 @@ Connects to the REST API at `http://localhost:8080` by default (`-BaseUrl` to ov
 
 ### Full test loop
 
-```
+```powershell
+# 1. Start the Docker stack (Kafka, Kafka UI, Prometheus, Grafana) — skip if already running
+docker compose up -d
+
+# 2. Start the application (new terminal)
+gradle bootRun
+
+# 3. Generate test messages
 gen-messages.cmd 100
-↓
+
+# 4. Send them to Kafka
 send-messages.cmd
-↓  (20s processing delay)
+
+# 5. Watch the pipeline process them (20s delay before each message is processed)
 .\monitor-timings.ps1 -Watch
-↓
-http://localhost:8081  (Kafka UI — browse input / output / siphon-bde topics)
 ```
+
+While messages are processing, check the UIs:
+
+| URL | What to look for |
+|-----|-----------------|
+| http://localhost:8081 | Kafka UI — consumer group lag draining on `input-topic`; messages appearing on `output-topic` and `siphon-bde-topic` |
+| http://localhost:8080/actuator/health | App health — `processorThreadPool` utilization |
+| http://localhost:3000 | Grafana — E2E and pipeline latency histograms (Explore tab) |
 
 Arguments are positional and all optional — only the ones provided are passed to Gradle.
 

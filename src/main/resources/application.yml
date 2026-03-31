@@ -63,11 +63,23 @@ app:
     # Empty list = all registered evaluators are active.
     enabled: [bde]
 
+# Active profile controls which metrics registry is used:
+#   prometheus (default) — exposes /actuator/prometheus for local Prometheus/Grafana
+#   datadog             — pushes metrics to Datadog (requires DD_API_KEY env var)
+#
+# Override at startup:
+#   gradle bootRun --args='--spring.profiles.active=datadog'
+#   java -jar app.jar --spring.profiles.active=datadog
+#   SPRING_PROFILES_ACTIVE=datadog java -jar app.jar
+spring:
+  profiles:
+    default: prometheus
+
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
+        include: health,info,metrics  # prometheus endpoint added by application-prometheus.yml
   endpoint:
     health:
       show-details: always   # expose component details at GET /actuator/health
