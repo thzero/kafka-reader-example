@@ -203,6 +203,58 @@ Control which are active via `app.siphon.enabled` (empty = all active).
 
 ---
 
+## Event Processing
+
+After the siphon check, the normal pipeline delegates business logic to an `EventProcessor` implementation selected by `eventType`. This lets each event code have its own processing strategy without changing the listener or pipeline.
+
+### How it works
+
+`MessageProcessorService` is injected with all `@Component` beans that implement `EventProcessor`. At startup it builds a `Map<eventCode, EventProcessor>`. For each message, `process(message, rawPayload)` looks up the processor by `message.event().eventType()` and falls back to the `"*"` default processor when no specific handler is registered.
+
+The processor owns the publish step — it calls `KafkaProducerService.publish(key, payload, topic)` directly. Throwing any exception routes the message to dead letter:
+- `KafkaPublishException` → `PUBLISH_ERROR`
+- Any other exception → `PROCESSING_ERROR`
+
+### Implemented processors
+
+| Class | Event code | Behaviour |
+|-------|-----------|----------|
+| `DefaultEventProcessor` | `*` (fallback) | Serializes the `KafkaMessage` to JSON and publishes to `kafka.topic.output` |
+
+### Adding a new processor
+
+1. Implement `EventProcessor`, annotate with `@Component`:
+   ```java
+   @Component
+   public class RenewalEventProcessor implements EventProcessor {
+       private final KafkaProducerService publisher;
+       private final String outputTopic;
+
+       public RenewalEventProcessor(
+               KafkaProducerService publisher,
+               @Value("${kafka.topic.output}") String outputTopic) {
+           this.publisher = publisher;
+           this.outputTopic = outputTopic;
+       }
+
+       @Override
+       public String eventCode() { return "RNW"; }
+
+       @Override
+       public void process(KafkaMessage message, String rawPayload) {
+           // custom renewal logic here
+           String key = message.body() != null ? message.body().messageId() : null;
+           publisher.publish(key, rawPayload, outputTopic);
+       }
+   }
+   ```
+
+2. That's it — `MessageProcessorService` picks up the new bean automatically via Spring's `List<EventProcessor>` injection. No other changes required.
+
+> **Note:** `eventCode()` must match the `eventType` string in the incoming message exactly (e.g. `"RNW"`). The `"*"` code is reserved for the default fallback — do not use it in a concrete processor.
+
+---
+
 ## Duplicate Detection
 
 Duplicate detection uses two layers so the consumer thread never touches the database:
@@ -358,10 +410,13 @@ src/main/java/com/example/kafkaprocessor/
 │   ├── KafkaConsumerConfig.java         # consumer + scheduler + active evaluator beans
 │   ├── KafkaConsumerListener.java       # @KafkaListener — main pipeline
 │   ├── KafkaProducerConfig.java         # transactional producer bean
-│   ├── KafkaProducerService.java        # publish wrapper
+│   ├── KafkaProducerService.java        # publish(key, payload, topic) — used by siphon and processors
 │   ├── KafkaPublishException.java
-│   ├── MessageProcessorService.java     # business logic (stub — replace this)
+│   ├── MessageProcessorService.java     # routes by eventType to registered EventProcessor beans
 │   ├── ProcessingException.java
+│   ├── processor/
+│   │   ├── EventProcessor.java          # interface — eventCode() + process(KafkaMessage, rawPayload)
+│   │   └── DefaultEventProcessor.java  # fallback for unrecognised event types (eventCode = "*")
 │   └── siphon/
 │       ├── SiphonEvaluator.java         # interface — eventCode() + evaluate()
 │       └── BdeSiphonEvaluator.java      # routes END+backdated=true to siphon-bde topic

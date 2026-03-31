@@ -1,4 +1,14 @@
 spring:
+  profiles:
+    # Active profile controls which metrics registry is used:
+    #   prometheus (default) — exposes /actuator/prometheus for local Prometheus/Grafana
+    #   datadog             — pushes metrics to Datadog (requires DD_API_KEY env var)
+    #
+    # Override at startup:
+    #   gradle bootRun --args='--spring.profiles.active=datadog'
+    #   java -jar app.jar --spring.profiles.active=datadog
+    #   SPRING_PROFILES_ACTIVE=datadog java -jar app.jar
+    default: prometheus
   datasource:
     url: jdbc:h2:mem:controldb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
     driver-class-name: org.h2.Driver
@@ -37,8 +47,9 @@ kafka:
 
   producer:
     # Transactional ID prefix for exactly-once semantics (EOS).
-    # Must be unique per instance — append an instance ID in multi-instance deployments.
-    transactional-id-prefix: kafkaprocessor-tx
+    # A random UUID suffix is appended at startup to guarantee uniqueness across instances.
+    # Each restart gets a fresh ID — orphaned transactions from a previous run time out naturally.
+    transactional-id-prefix: kafkaprocessor-tx-${random.uuid}
 
 # -----------------------------------------------------------------------
 # Application-specific settings — not part of Kafka or Spring internals.
@@ -62,18 +73,6 @@ app:
     # Matches SiphonEvaluator.eventCode() on each implementation.
     # Empty list = all registered evaluators are active.
     enabled: [bde]
-
-# Active profile controls which metrics registry is used:
-#   prometheus (default) — exposes /actuator/prometheus for local Prometheus/Grafana
-#   datadog             — pushes metrics to Datadog (requires DD_API_KEY env var)
-#
-# Override at startup:
-#   gradle bootRun --args='--spring.profiles.active=datadog'
-#   java -jar app.jar --spring.profiles.active=datadog
-#   SPRING_PROFILES_ACTIVE=datadog java -jar app.jar
-spring:
-  profiles:
-    default: prometheus
 
 management:
   endpoints:

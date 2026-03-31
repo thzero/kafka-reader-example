@@ -1,55 +1,44 @@
 package com.example.kafkaprocessor.kafka;
 
-import com.example.kafkaprocessor.model.KafkaMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
+/**
+ * Unified Kafka publisher. Accepts a raw JSON payload string and a target topic.
+ * Used by both the siphon fast-path in {@link KafkaConsumerListener} and by
+ * {@link com.example.kafkaprocessor.kafka.processor.EventProcessor} implementations.
+ */
 @Service
 public class KafkaProducerService {
 
     private static final Logger log = LoggerFactory.getLogger(KafkaProducerService.class);
 
-    private final KafkaTemplate<String, KafkaMessage> kafkaTemplate;
+    private final KafkaTemplate<String, String> kafkaTemplate;
 
-    @Value("${kafka.topic.output}")
-    private String outputTopic;
-
-    public KafkaProducerService(KafkaTemplate<String, KafkaMessage> kafkaTemplate) {
+    public KafkaProducerService(KafkaTemplate<String, String> kafkaTemplate) {
         this.kafkaTemplate = kafkaTemplate;
     }
 
-    public void publish(KafkaMessage message) {
-        String messageId = message.body() != null ? message.body().messageId() : null;
-        String interactionId = message.event() != null ? message.event().interactionId() : null;
-
+    /**
+     * Publishes a JSON payload to the specified Kafka topic within the current transaction.
+     *
+     * @param key     Kafka record key (typically the messageId) — used for partition routing
+     * @param payload raw JSON string to publish as the record value
+     * @param topic   target Kafka topic
+     * @throws KafkaPublishException if the send fails
+     */
+    public void publish(String key, String payload, String topic) {
         kafkaTemplate.executeInTransaction(ops -> {
-            ops.send(outputTopic, messageId, message).whenComplete((result, ex) -> {
+            ops.send(topic, key, payload).whenComplete((result, ex) -> {
                 if (ex != null) {
-                    throw new KafkaPublishException("Failed to publish message: " + messageId, ex);
+                    throw new KafkaPublishException(
+                            "Failed to publish to topic=" + topic + " key=" + key, ex);
                 }
             });
             return null;
         });
-
-        log.info("Publish succeeded messageId={} interactionId={}", messageId, interactionId);
-    }
-
-    public void siphon(KafkaMessage message, String topic) {
-        String messageId = message.body() != null ? message.body().messageId() : null;
-        String interactionId = message.event() != null ? message.event().interactionId() : null;
-
-        kafkaTemplate.executeInTransaction(ops -> {
-            ops.send(topic, messageId, message).whenComplete((result, ex) -> {
-                if (ex != null) {
-                    throw new KafkaPublishException("Failed to siphon message: " + messageId, ex);
-                }
-            });
-            return null;
-        });
-
-        log.info("Siphon succeeded topic={} messageId={} interactionId={}", topic, messageId, interactionId);
+        log.info("Published to topic={} key={}", topic, key);
     }
 }

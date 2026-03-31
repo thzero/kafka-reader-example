@@ -113,7 +113,7 @@ public class KafkaConsumerListener {
             if (siphonTopic.isPresent()) {
                 log.info("Siphon triggered, routing to topic={}", siphonTopic.get());
                 try {
-                    kafkaProducerService.siphon(message, siphonTopic.get());
+                    kafkaProducerService.publish(messageId, rawPayload, siphonTopic.get());
                 } catch (Exception e) {
                     log.error("Siphon publish failed", e);
                     return; // no ack — redelivery
@@ -194,24 +194,22 @@ public class KafkaConsumerListener {
                 return; // no ack
             }
 
-            // --- Process ---
-            KafkaMessage processed;
+            // --- Process and Publish (delegated to EventProcessor via MessageProcessorService) ---
+            // The EventProcessor implementation is responsible for both transforming the message
+            // and calling KafkaProducerService.publish() with the result JSON and target topic.
+            // KafkaPublishException from within the processor maps to PUBLISH_ERROR;
+            // any other exception from business logic maps to PROCESSING_ERROR.
             try {
-                processed = messageProcessorService.process(message);
+                messageProcessorService.process(message, rawPayload);
+            } catch (KafkaPublishException e) {
+                log.error("Publish failed", e);
+                meterRegistry.counter("kafka.processor.messages.failed", "reason", "PUBLISH_ERROR").increment();
+                deadLetterService.handle(rawPayload, ReasonCode.PUBLISH_ERROR, messageId, interactionId);
+                return; // no ack
             } catch (Exception e) {
                 log.error("Processing failed", e);
                 meterRegistry.counter("kafka.processor.messages.failed", "reason", "PROCESSING_ERROR").increment();
                 deadLetterService.handle(rawPayload, ReasonCode.PROCESSING_ERROR, messageId, interactionId);
-                return; // no ack
-            }
-
-            // --- Publish ---
-            try {
-                kafkaProducerService.publish(processed);
-            } catch (Exception e) {
-                log.error("Publish failed", e);
-                meterRegistry.counter("kafka.processor.messages.failed", "reason", "PUBLISH_ERROR").increment();
-                deadLetterService.handle(rawPayload, ReasonCode.PUBLISH_ERROR, messageId, interactionId);
                 return; // no ack
             }
 

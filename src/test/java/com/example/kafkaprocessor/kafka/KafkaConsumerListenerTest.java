@@ -4,9 +4,6 @@ import com.example.kafkaprocessor.control.ControlService;
 import com.example.kafkaprocessor.deadletter.DeadLetterService;
 import com.example.kafkaprocessor.deadletter.ReasonCode;
 import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
-import com.example.kafkaprocessor.model.EventHeader;
-import com.example.kafkaprocessor.model.KafkaMessage;
-import com.example.kafkaprocessor.model.MessageBody;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -74,19 +71,18 @@ class KafkaConsumerListenerTest {
 
     @Test
     void happyPath_writesControlRecords_publishesAndAcks() throws InterruptedException {
-        KafkaMessage processed = new KafkaMessage(
-                new EventHeader(IID_1, "TEST", null), new MessageBody(MSG_ID_1));
-        when(messageProcessorService.process(any())).thenReturn(processed);
+        // messageProcessorService.process() is void — default mock behaviour (do nothing) is correct.
+        // The actual publish is done inside the EventProcessor, not in the listener.
 
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();
 
         verify(controlService).recordReceived(MSG_ID_1, IID_1);
-        verify(messageProcessorService).process(any());
-        verify(kafkaProducerService).publish(processed);
+        verify(messageProcessorService).process(any(), eq(VALID_PAYLOAD));
         verify(controlService).recordPublished(MSG_ID_1, IID_1);
         verify(acknowledgment).acknowledge();
         verifyNoInteractions(deadLetterService);
+        // publish is now inside EventProcessor — not verified on kafkaProducerService here
     }
 
     @Test
@@ -126,10 +122,9 @@ class KafkaConsumerListenerTest {
 
         listener.listen(record(bdePayload), acknowledgment);
 
-        verify(kafkaProducerService).siphon(any(), eq("test-siphon-topic"));
+        verify(kafkaProducerService).publish(eq("00000000-0000-0000-0000-0000000000bd"), eq(bdePayload), eq("test-siphon-topic"));
         verify(acknowledgment).acknowledge();
         verifyNoInteractions(controlService, messageProcessorService, deadLetterService);
-        verify(kafkaProducerService, never()).publish(any());
     }
 
     @Test
@@ -137,7 +132,7 @@ class KafkaConsumerListenerTest {
         String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"00000000-0000-0000-0000-0000000000bd\"}}";
         when(siphonEvaluator.evaluate(any())).thenReturn(java.util.Optional.of("test-siphon-topic"));
         doThrow(new KafkaPublishException("siphon failed", new RuntimeException()))
-                .when(kafkaProducerService).siphon(any(), any());
+                .when(kafkaProducerService).publish(any(), any(), any());
 
         listener.listen(record(bdePayload), acknowledgment);
 
@@ -171,23 +166,19 @@ class KafkaConsumerListenerTest {
 
     @Test
     void processingFailure_routesToDeadLetter_noAck() throws InterruptedException {
-        when(messageProcessorService.process(any())).thenThrow(new ProcessingException("boom"));
+        doThrow(new ProcessingException("boom")).when(messageProcessorService).process(any(), any());
 
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();
 
         verify(deadLetterService).handle(eq(VALID_PAYLOAD), eq(ReasonCode.PROCESSING_ERROR), eq(MSG_ID_1), eq(IID_1));
         verify(acknowledgment, never()).acknowledge();
-        verify(kafkaProducerService, never()).publish(any());
     }
 
     @Test
     void publishFailure_routesToDeadLetter_noAck() throws InterruptedException {
-        KafkaMessage processed = new KafkaMessage(
-                new EventHeader(IID_1, "TEST", null), new MessageBody(MSG_ID_1));
-        when(messageProcessorService.process(any())).thenReturn(processed);
         doThrow(new KafkaPublishException("publish failed", new RuntimeException()))
-                .when(kafkaProducerService).publish(any());
+                .when(messageProcessorService).process(any(), any());
 
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();
