@@ -8,6 +8,7 @@ import com.example.kafkaprocessor.model.EventHeader;
 import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.model.MessageBody;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,7 +55,8 @@ class KafkaConsumerListenerTest {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         listener = new KafkaConsumerListener(
                 objectMapper, controlService,
-                messageProcessorService, kafkaProducerService, deadLetterService, scheduler, List.of(siphonEvaluator));
+                messageProcessorService, kafkaProducerService, deadLetterService, scheduler,
+                List.of(siphonEvaluator), new SimpleMeterRegistry());
         // Zero delay so deferred work fires immediately, keeping tests fast and deterministic
         ReflectionTestUtils.setField(listener, "processingDelayMs", 0L);
     }
@@ -150,7 +152,8 @@ class KafkaConsumerListenerTest {
         ScheduledExecutorService nonExecutingScheduler = mock(ScheduledExecutorService.class);
         KafkaConsumerListener l = new KafkaConsumerListener(
                 objectMapper, controlService, messageProcessorService,
-                kafkaProducerService, deadLetterService, nonExecutingScheduler, List.of(siphonEvaluator));
+                kafkaProducerService, deadLetterService, nonExecutingScheduler,
+                List.of(siphonEvaluator), new SimpleMeterRegistry());
         ReflectionTestUtils.setField(l, "processingDelayMs", 0L);
 
         Acknowledgment ack2 = mock(Acknowledgment.class);

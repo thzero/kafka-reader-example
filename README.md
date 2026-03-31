@@ -389,20 +389,100 @@ src/test/java/com/example/kafkaprocessor/
 
 ## Running Locally
 
-Requires Java 21 and a running Kafka broker (or use the integration test with `@EmbeddedKafka`).
+Requires Java 21, Docker Desktop, and Gradle on your PATH (or use the absolute path — see `gen-messages.cmd`).
+
+### 1. Start the local stack
 
 ```bash
-# Build and run all tests
-gradle test
+docker compose up -d
+```
 
-# Run the application
+This starts four services:
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Kafka broker | `localhost:9092` | — |
+| Kafka UI | http://localhost:8081 | — |
+| Prometheus | http://localhost:9090 | — |
+| Grafana | http://localhost:3000 | admin / admin |
+
+**Kafka UI** (`http://localhost:8081`) — browse topics, consumer group lag, and individual messages.
+
+**Prometheus** (`http://localhost:9090`) — raw metric store. Scrapes `/actuator/prometheus` on the running app every 5 seconds. Use the **Graph** tab to run ad-hoc PromQL queries.
+
+**Grafana** (`http://localhost:3000`) — dashboards and alerting. Prometheus is auto-provisioned as the default datasource on first start — no manual setup needed.
+
+#### Using Grafana
+
+1. Open http://localhost:3000 and log in with `admin` / `admin`
+2. Go to **Explore** (compass icon in the left sidebar) — the Prometheus datasource is pre-selected
+3. Enter a PromQL query and click **Run query**
+
+Useful queries:
+
+```promql
+# P95 end-to-end latency over the last minute (includes processing delay)
+histogram_quantile(0.95, rate(kafka_processor_e2e_latency_seconds_bucket[1m]))
+
+# P95 pipeline execution latency (code only, excludes delay)
+histogram_quantile(0.95, rate(kafka_processor_pipeline_latency_seconds_bucket[1m]))
+
+# Message throughput per second (published)
+rate(kafka_processor_messages_published_total[1m])
+
+# Dead letter rate by reason code
+rate(kafka_processor_messages_failed_total[1m])
+
+# Current in-flight estimate
+kafka_processor_messages_received_total - kafka_processor_messages_published_total - kafka_processor_messages_failed_total
+```
+
+To build a dashboard: **Dashboards → New → Add visualization**, paste a query, and save.
+
+#### Stopping the stack
+
+```bash
+docker compose down        # stop containers, keep volumes
+docker compose down -v     # stop containers AND delete all data
+```
+
+### 2. Build and run all tests
+
+```bash
+gradle test
+```
+
+### 3. Run the application
+
+The active Spring profile controls which metrics backend is used:
+
+| Profile | Where | How metrics are exported |
+|---------|-------|--------------------------|
+| `prometheus` *(default)* | Home / local | `/actuator/prometheus` scraped by local Docker Prometheus |
+| `datadog` | Work | Pushed to Datadog API every 10s — requires `DD_API_KEY` |
+
+**Local (Prometheus — default):**
+```bash
 gradle bootRun
 ```
 
-Generation of messages...
+**Work (Datadog):**
+```powershell
+$env:DD_API_KEY = "your-api-key"
+$env:SPRING_PROFILES_ACTIVE = "datadog"
+gradle bootRun
+```
+Or as a one-liner:
+```bash
+DD_API_KEY=your-api-key gradle bootRun --args='--spring.profiles.active=datadog'
+```
+
+The `kafka.processor.*` counters and timers appear in Datadog automatically under those metric names. The `/actuator/prometheus` endpoint is only available under the `prometheus` profile.
+
+### 4. Generate test messages
 
 ```bash
-# Default: 50 messages with default distribution
+# Default: 1000 messages with default distribution
 gradle generateMessages
 
 # Custom count
@@ -413,10 +493,104 @@ gradle generateMessages -Pcount=500 -PpctNC=30 -PpctEND=45 -PpctTRM=5 -PpctRNW=2
 
 # Custom BDE ratio within END events (default 20%)
 gradle generateMessages -Pcount=100 -PpctBDE=40
-
-# Custom output directory
-gradle generateMessages -Pcount=50 -PoutDir=C:/test-payloads
 ```
+
+Output is written to `build/generated-messages/messages-<count>.jsonl` — one JSON object per line.
+
+**Windows shortcut — `gen-messages.cmd`:**
+
+```bat
+gen-messages.cmd                         :: 1000 messages, default distribution
+gen-messages.cmd 500                     :: 500 messages, default distribution
+gen-messages.cmd 200 10 60 10 20 15      :: count pctNC pctEND pctTRM pctRNW pctBDE
+```
+
+### 5. Send messages to Kafka
+
+```bat
+send-messages.cmd                                          :: sends most recent JSONL → input-topic
+send-messages.cmd build\generated-messages\messages-100.jsonl
+send-messages.cmd build\generated-messages\messages-100.jsonl my-input-topic
+```
+
+Requires the `kafka` container to be running. The script copies the JSONL into the container and pipes it through `kafka-console-producer`.
+
+### 6. Monitor pipeline timings
+
+```powershell
+.\monitor-timings.ps1           # single snapshot
+.\monitor-timings.ps1 -Watch   # refresh every 5 seconds
+```
+
+Reports:
+- **Throughput**: received / published / in-flight / dead letter counts
+- **Latency** (receivedAt → publishedAt): min / avg / P95 / max across all completed messages
+- **Dead letter breakdown** by reason code
+- **In-flight message IDs** (up to 20) — messages received but not yet published
+
+Connects to the REST API at `http://localhost:8080` by default (`-BaseUrl` to override).
+
+### Full test loop
+
+```powershell
+# 1. Start the Docker stack (Kafka, Kafka UI, Prometheus, Grafana) — skip if already running
+docker compose up -d
+
+# 2. Start the application (new terminal)
+gradle bootRun
+
+# 3. Generate test messages
+gen-messages.cmd 100
+
+# 4. Send them to Kafka
+send-messages.cmd
+
+# 5. Watch the pipeline process them (20s delay before each message is processed)
+.\monitor-timings.ps1 -Watch
+```
+
+While messages are processing, check the UIs:
+
+| URL | What to look for |
+|-----|-----------------|
+| http://localhost:8081 | Kafka UI — consumer group lag draining on `input-topic`; messages appearing on `output-topic` and `siphon-bde-topic` |
+| http://localhost:8080/actuator/health | App health — `processorThreadPool` utilization |
+| http://localhost:3000 | Grafana — E2E and pipeline latency histograms (Explore tab) |
+
+Arguments are positional and all optional — only the ones provided are passed to Gradle.
+
+---
+
+## Bruno API Collection
+
+A [Bruno](https://www.usebruno.com/) collection is included in the `bruno/` folder, covering all REST endpoints and Actuator health/metrics checks.
+
+**Open the collection:**
+1. Install Bruno (free, open-source — [usebruno.com](https://www.usebruno.com/))
+2. In Bruno: **Open Collection** → select the `bruno/` folder
+3. Select the **local** environment (top-right dropdown) — sets `baseUrl` to `http://localhost:8080`
+
+**Requests included:**
+
+| Folder | Request | Endpoint |
+|--------|---------|----------|
+| api | Get Config | `GET /api/config` |
+| api | Get Control Inbound | `GET /api/control/inbound` |
+| api | Get Control Outbound | `GET /api/control/outbound` |
+| api | Get Dead Letter | `GET /api/deadletter` |
+| actuator | Health | `GET /actuator/health` |
+| actuator | Health - Processor Thread Pool | `GET /actuator/health/processorThreadPool` |
+| actuator | Metrics | `GET /actuator/metrics` |
+| actuator | Metrics - E2E Latency | `GET /actuator/metrics/kafka.processor.e2e.latency` |
+| actuator | Metrics - Pipeline Latency | `GET /actuator/metrics/kafka.processor.pipeline.latency` |
+| actuator | Metrics - Messages Received | `GET /actuator/metrics/kafka.processor.messages.received` |
+| actuator | Metrics - Messages Published | `GET /actuator/metrics/kafka.processor.messages.published` |
+| actuator | Metrics - Messages Siphoned | `GET /actuator/metrics/kafka.processor.messages.siphoned` |
+| actuator | Metrics - Messages Failed | `GET /actuator/metrics/kafka.processor.messages.failed` |
+| actuator | Prometheus Scrape | `GET /actuator/prometheus` |
+| actuator | Info | `GET /actuator/info` |
+
+> Optional query parameters (`startTimestamp`, `endTimestamp`, `tag`) are pre-filled but **disabled** by default (prefixed with `~` in the `.bru` files). Enable them in Bruno's Params tab when needed.
 
 ---
 
