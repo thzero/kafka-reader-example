@@ -63,5 +63,19 @@ app:
     # Empty list = all registered evaluators are active.
     enabled: [bde]
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        kafka.processor.e2e.latency: true
+        kafka.processor.pipeline.latency: true
+      percentiles:
+        kafka.processor.e2e.latency: 0.5,0.95,0.99
+        kafka.processor.pipeline.latency: 0.5,0.95,0.99
+
 server:
   port: 8080

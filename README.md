@@ -389,17 +389,30 @@ src/test/java/com/example/kafkaprocessor/
 
 ## Running Locally
 
-Requires Java 21 and a running Kafka broker (or use the integration test with `@EmbeddedKafka`).
+Requires Java 21, Docker Desktop, and Gradle on your PATH (or use the absolute path — see `gen-messages.cmd`).
+
+### 1. Start Kafka + Kafka UI
 
 ```bash
-# Build and run all tests
-gradle test
+docker compose up -d
+```
 
-# Run the application
+- Kafka broker: `localhost:9092`
+- Kafka UI: http://localhost:8081 — browse all topics, consumer groups, and offsets
+
+### 2. Build and run all tests
+
+```bash
+gradle test
+```
+
+### 3. Run the application
+
+```bash
 gradle bootRun
 ```
 
-Generation of messages...
+### 4. Generate test messages
 
 ```bash
 # Default: 1000 messages with default distribution
@@ -413,12 +426,9 @@ gradle generateMessages -Pcount=500 -PpctNC=30 -PpctEND=45 -PpctTRM=5 -PpctRNW=2
 
 # Custom BDE ratio within END events (default 20%)
 gradle generateMessages -Pcount=100 -PpctBDE=40
-
-# Custom output directory
-gradle generateMessages -Pcount=50 -PoutDir=C:/test-payloads
 ```
 
-Output is written to a single JSONL file (`build/generated-messages/messages-<count>.jsonl`) with one JSON object per line, ready to send directly to Kafka.
+Output is written to `build/generated-messages/messages-<count>.jsonl` — one JSON object per line.
 
 **Windows shortcut — `gen-messages.cmd`:**
 
@@ -426,6 +436,43 @@ Output is written to a single JSONL file (`build/generated-messages/messages-<co
 gen-messages.cmd                         :: 1000 messages, default distribution
 gen-messages.cmd 500                     :: 500 messages, default distribution
 gen-messages.cmd 200 10 60 10 20 15      :: count pctNC pctEND pctTRM pctRNW pctBDE
+```
+
+### 5. Send messages to Kafka
+
+```bat
+send-messages.cmd                                          :: sends most recent JSONL → input-topic
+send-messages.cmd build\generated-messages\messages-100.jsonl
+send-messages.cmd build\generated-messages\messages-100.jsonl my-input-topic
+```
+
+Requires the `kafka` container to be running. The script copies the JSONL into the container and pipes it through `kafka-console-producer`.
+
+### 6. Monitor pipeline timings
+
+```powershell
+.\monitor-timings.ps1           # single snapshot
+.\monitor-timings.ps1 -Watch   # refresh every 5 seconds
+```
+
+Reports:
+- **Throughput**: received / published / in-flight / dead letter counts
+- **Latency** (receivedAt → publishedAt): min / avg / P95 / max across all completed messages
+- **Dead letter breakdown** by reason code
+- **In-flight message IDs** (up to 20) — messages received but not yet published
+
+Connects to the REST API at `http://localhost:8080` by default (`-BaseUrl` to override).
+
+### Full test loop
+
+```
+gen-messages.cmd 100
+↓
+send-messages.cmd
+↓  (20s processing delay)
+.\monitor-timings.ps1 -Watch
+↓
+http://localhost:8081  (Kafka UI — browse input / output / siphon-bde topics)
 ```
 
 Arguments are positional and all optional — only the ones provided are passed to Gradle.
