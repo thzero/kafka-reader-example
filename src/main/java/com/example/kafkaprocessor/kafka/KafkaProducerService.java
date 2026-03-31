@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Service;
 
 import java.util.Objects;
@@ -45,7 +46,7 @@ public class KafkaProducerService {
      * @param topic   target Kafka topic
      * @throws KafkaPublishException if the send fails
      */
-    public void publish(String key, String payload, String topic) {
+    public void publish(@NonNull String key, @NonNull String payload, @NonNull String topic) {
         Objects.requireNonNull(topic, "topic must not be null");
         Objects.requireNonNull(payload, "payload must not be null");
         kafkaTemplate.executeInTransaction(ops -> {
@@ -58,7 +59,7 @@ public class KafkaProducerService {
                 Thread.currentThread().interrupt();
                 throw new KafkaPublishException("Interrupted publishing to topic=" + topic, e);
             }
-            return null;
+            return Boolean.TRUE;
         });
         log.info("Published to topic={} key={}", topic, key);
     }
@@ -73,7 +74,7 @@ public class KafkaProducerService {
      * @param topic   target Kafka topic
      * @throws KafkaPublishException if the send fails
      */
-    public void publish(String key, JsonNode payload, String topic) {
+    public void publish(@NonNull String key, @NonNull JsonNode payload, @NonNull String topic) {
         Objects.requireNonNull(topic, "topic must not be null");
         Objects.requireNonNull(payload, "payload must not be null");
         jsonKafkaTemplate.executeInTransaction(ops -> {
@@ -86,7 +87,7 @@ public class KafkaProducerService {
                 Thread.currentThread().interrupt();
                 throw new KafkaPublishException("Interrupted publishing to topic=" + topic, e);
             }
-            return null;
+            return Boolean.TRUE;
         });
         log.info("Published to topic={} key={}", topic, key);
     }

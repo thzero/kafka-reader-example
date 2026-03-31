@@ -12,6 +12,7 @@ import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.lang.NonNull;
 
 import java.util.HashMap;
 import java.util.List;
@@ -49,7 +50,7 @@ public class KafkaConsumerConfig {
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory(
-            ConsumerFactory<String, String> consumerFactory) {
+            @NonNull ConsumerFactory<String, String> consumerFactory) {
         ConcurrentKafkaListenerContainerFactory<String, String> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);

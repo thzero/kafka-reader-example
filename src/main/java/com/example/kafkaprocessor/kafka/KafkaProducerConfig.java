@@ -9,6 +9,7 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.support.serializer.JsonSerializer;
+import org.springframework.lang.NonNull;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -19,9 +20,11 @@ import java.util.Map;
 public class KafkaProducerConfig {
 
     @Value("${kafka.bootstrap-servers}")
+    @NonNull
     private String bootstrapServers;
 
     @Value("${kafka.producer.transactional-id-prefix}")
+    @NonNull
     private String transactionalIdPrefix;
 
     @Bean
@@ -39,8 +42,8 @@ public class KafkaProducerConfig {
     }
 
     @Bean
-    public KafkaTemplate<String, String> kafkaTemplate() {
-        return new KafkaTemplate<>(producerFactory());
+    public KafkaTemplate<String, String> kafkaTemplate(@NonNull ProducerFactory<String, String> producerFactory) {
+        return new KafkaTemplate<>(producerFactory);
     }
 
     @Bean
@@ -59,7 +62,7 @@ public class KafkaProducerConfig {
     }
 
     @Bean
-    public KafkaTemplate<String, JsonNode> jsonKafkaTemplate() {
-        return new KafkaTemplate<>(jsonProducerFactory());
+    public KafkaTemplate<String, JsonNode> jsonKafkaTemplate(@NonNull ProducerFactory<String, JsonNode> jsonProducerFactory) {
+        return new KafkaTemplate<>(jsonProducerFactory);
     }
 }
