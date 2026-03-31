@@ -15,16 +15,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 @Configuration
 public class KafkaProducerConfig {
 
     @Value("${kafka.bootstrap-servers}")
-    @NonNull
     private String bootstrapServers;
 
     @Value("${kafka.producer.transactional-id-prefix}")
-    @NonNull
     private String transactionalIdPrefix;
 
     @Bean
@@ -37,7 +36,7 @@ public class KafkaProducerConfig {
 
         DefaultKafkaProducerFactory<String, String> factory =
                 new DefaultKafkaProducerFactory<>(props);
-        factory.setTransactionIdPrefix(transactionalIdPrefix);
+        factory.setTransactionIdPrefix(Objects.requireNonNull(transactionalIdPrefix));
         return factory;
     }
 
@@ -57,7 +56,7 @@ public class KafkaProducerConfig {
 
         DefaultKafkaProducerFactory<String, JsonNode> factory =
                 new DefaultKafkaProducerFactory<>(props);
-        factory.setTransactionIdPrefix(transactionalIdPrefix + "-json");
+        factory.setTransactionIdPrefix(Objects.requireNonNull(transactionalIdPrefix) + "-json");
         return factory;
     }
 

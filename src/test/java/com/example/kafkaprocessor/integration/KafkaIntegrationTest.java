@@ -22,7 +22,6 @@ import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.ContainerTestUtils;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
-import org.springframework.lang.NonNull;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
@@ -56,15 +55,12 @@ class KafkaIntegrationTest {
     private ObjectMapper objectMapper;
 
     @Value("${kafka.topic.input}")
-    @NonNull
     private String inputTopic;
 
     @Value("${kafka.topic.output}")
-    @NonNull
     private String outputTopic;
 
     @Value("${kafka.topic.siphon-bde}")
-    @NonNull
     private String siphonBdeTopic;
 
     @Test
@@ -96,7 +92,7 @@ class KafkaIntegrationTest {
                 new org.springframework.kafka.core.DefaultKafkaProducerFactory<>(producerProps);
         org.springframework.kafka.core.KafkaTemplate<String, String> template =
                 new org.springframework.kafka.core.KafkaTemplate<>(pf);
-        template.send(inputTopic, payload);
+        template.send(Objects.requireNonNull(inputTopic), payload);
 
         // Assert: message appears on output topic
         ConsumerRecord<String, String> received = outputRecords.poll(10, TimeUnit.SECONDS);
@@ -142,7 +138,7 @@ class KafkaIntegrationTest {
                 new org.springframework.kafka.core.DefaultKafkaProducerFactory<>(producerProps);
         org.springframework.kafka.core.KafkaTemplate<String, String> template =
                 new org.springframework.kafka.core.KafkaTemplate<>(pf);
-        template.send(inputTopic, payload);
+        template.send(Objects.requireNonNull(inputTopic), payload);
 
         // Assert: message appears on the siphon topic
         ConsumerRecord<String, String> siphoned = siphonRecords.poll(10, TimeUnit.SECONDS);
