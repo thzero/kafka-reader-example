@@ -68,6 +68,12 @@ management:
     web:
       exposure:
         include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always   # expose component details at GET /actuator/health
+  health:
+    defaults:
+      enabled: true
   metrics:
     distribution:
       percentiles-histogram:
