@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.Objects;
+
 /**
  * Unified Kafka publisher.
  * Used by both the siphon fast-path in {@link KafkaConsumerListener} and by
@@ -29,8 +31,8 @@ public class KafkaProducerService {
     public KafkaProducerService(
             @Qualifier("kafkaTemplate") KafkaTemplate<String, String> kafkaTemplate,
             @Qualifier("jsonKafkaTemplate") KafkaTemplate<String, JsonNode> jsonKafkaTemplate) {
-        this.kafkaTemplate = kafkaTemplate;
-        this.jsonKafkaTemplate = jsonKafkaTemplate;
+        this.kafkaTemplate = Objects.requireNonNull(kafkaTemplate, "kafkaTemplate must not be null");
+        this.jsonKafkaTemplate = Objects.requireNonNull(jsonKafkaTemplate, "jsonKafkaTemplate must not be null");
     }
 
     /**
@@ -43,6 +45,8 @@ public class KafkaProducerService {
      * @throws KafkaPublishException if the send fails
      */
     public void publish(String key, String payload, String topic) {
+        Objects.requireNonNull(topic, "topic must not be null");
+        Objects.requireNonNull(payload, "payload must not be null");
         kafkaTemplate.executeInTransaction(ops -> {
             ops.send(topic, key, payload).whenComplete((result, ex) -> {
                 if (ex != null) {
@@ -66,6 +70,8 @@ public class KafkaProducerService {
      * @throws KafkaPublishException if the send fails
      */
     public void publish(String key, JsonNode payload, String topic) {
+        Objects.requireNonNull(topic, "topic must not be null");
+        Objects.requireNonNull(payload, "payload must not be null");
         jsonKafkaTemplate.executeInTransaction(ops -> {
             ops.send(topic, key, payload).whenComplete((result, ex) -> {
                 if (ex != null) {

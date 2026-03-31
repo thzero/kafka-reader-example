@@ -444,22 +444,32 @@ src/test/java/com/example/kafkaprocessor/
 
 ## Running Locally
 
-Requires Java 21, Docker Desktop, and Gradle on your PATH (or use the absolute path — see `gen-messages.cmd`).
+Requires Java 21 and Docker Desktop. All Gradle commands use `gradlew` (the wrapper) — no local Gradle installation needed.
 
 ### 1. Start the local stack
 
 ```bash
+# First run or after changing KAFKA_CLUSTER_ID — clear stale volumes first:
+docker compose down -v
+
+# Start all services in the background:
 docker compose up -d
+
+# Open Grafana once the stack is up:
+start http://localhost:3000
 ```
 
 This starts four services:
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| Kafka broker | `localhost:9092` | — |
+| Kafka broker (host) | `localhost:9092` | — |
+| Kafka broker (internal) | `kafka:29092` | — (Docker container-to-container only) |
 | Kafka UI | http://localhost:8081 | — |
 | Prometheus | http://localhost:9090 | — |
 | Grafana | http://localhost:3000 | admin / admin |
+
+> **Kafka listener split:** Two advertised listeners are configured — `PLAINTEXT://localhost:9092` for the Spring Boot app running on the host, and `INTERNAL://kafka:29092` for services inside Docker (Kafka UI, etc.). Kafka tells connecting clients to reconnect on the advertised address, so a container given `localhost:9092` would try to connect to itself. Using the Docker service name `kafka:29092` resolves correctly within the Docker network.
 
 **Kafka UI** (`http://localhost:8081`) — browse topics, consumer group lag, and individual messages.
 
@@ -534,7 +544,7 @@ docker compose down -v     # stop containers AND delete all data
 ### 2. Build and run all tests
 
 ```bash
-gradle test
+.\gradlew test
 ```
 
 ### 3. Run the application
@@ -547,37 +557,37 @@ The active Spring profile controls which metrics backend is used:
 | `datadog` | Work | Pushed to Datadog API every 10s — requires `DD_API_KEY` |
 
 **Local (Prometheus — default):**
-```bash
-gradle bootRun
+```powershell
+.\gradlew bootRun
 ```
 
 **Work (Datadog):**
 ```powershell
 $env:DD_API_KEY = "your-api-key"
 $env:SPRING_PROFILES_ACTIVE = "datadog"
-gradle bootRun
+.\gradlew bootRun
 ```
 Or as a one-liner:
 ```bash
-DD_API_KEY=your-api-key gradle bootRun --args='--spring.profiles.active=datadog'
+DD_API_KEY=your-api-key ./gradlew bootRun --args='--spring.profiles.active=datadog'
 ```
 
 The `kafka.processor.*` counters and timers appear in Datadog automatically under those metric names. The `/actuator/prometheus` endpoint is only available under the `prometheus` profile.
 
 ### 4. Generate test messages
 
-```bash
+```powershell
 # Default: 1000 messages with default distribution
-gradle generateMessages
+.\gradlew generateMessages
 
 # Custom count
-gradle generateMessages -Pcount=200
+.\gradlew generateMessages -Pcount=200
 
 # Custom distribution (must sum to 100)
-gradle generateMessages -Pcount=500 -PpctNC=30 -PpctEND=45 -PpctTRM=5 -PpctRNW=20
+.\gradlew generateMessages -Pcount=500 -PpctNC=30 -PpctEND=45 -PpctTRM=5 -PpctRNW=20
 
 # Custom BDE ratio within END events (default 20%)
-gradle generateMessages -Pcount=100 -PpctBDE=40
+.\gradlew generateMessages -Pcount=100 -PpctBDE=40
 ```
 
 Output is written to `build/generated-messages/messages-<count>.jsonl` — one JSON object per line.
@@ -617,7 +627,7 @@ The provisioned dashboard auto-loads and shows:
 docker compose up -d
 
 # 2. Start the application (new terminal)
-gradle bootRun
+.\gradlew bootRun
 
 # 3. Generate test messages
 gen-messages.cmd 100
