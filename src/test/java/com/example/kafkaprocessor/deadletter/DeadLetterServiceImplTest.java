@@ -20,16 +20,19 @@ class DeadLetterServiceImplTest {
     @Autowired
     private DeadLetterRepository repository;
 
+    private static final String MSG_ID_1 = "00000000-0000-0000-0000-000000000001";
+    private static final String MSG_ID_2 = "00000000-0000-0000-0000-000000000002";
+
     @Test
     void handle_persistsRecordWithCorrectFields() {
-        deadLetterService.handle("{\"event\":{}}", ReasonCode.PROCESSING_ERROR, "msg-1", "interaction-1");
+        deadLetterService.handle("{\"event\":{}}", ReasonCode.PROCESSING_ERROR, MSG_ID_1, "interaction-1");
 
         List<DeadLetterRecord> records = repository.findAll();
         assertThat(records).hasSize(1);
         DeadLetterRecord record = records.get(0);
         assertThat(record.getRawPayload()).isEqualTo("{\"event\":{}}");
         assertThat(record.getReasonCode()).isEqualTo(ReasonCode.PROCESSING_ERROR);
-        assertThat(record.getMessageId()).isEqualTo("msg-1");
+        assertThat(record.getMessageId()).isEqualTo(MSG_ID_1);
         assertThat(record.getInteractionId()).isEqualTo("interaction-1");
         assertThat(record.getFailedAt()).isNotNull();
     }
@@ -47,7 +50,7 @@ class DeadLetterServiceImplTest {
     @Test
     void findByFailedAtGreaterThanEqual_returnsRecordsInRange() {
         Instant before = Instant.now().minusSeconds(60);
-        deadLetterService.handle("{}", ReasonCode.PUBLISH_ERROR, "msg-2", "interaction-2");
+        deadLetterService.handle("{}", ReasonCode.PUBLISH_ERROR, MSG_ID_2, "interaction-2");
 
         List<DeadLetterRecord> results = repository.findByFailedAtGreaterThanEqual(before);
         assertThat(results).hasSize(1);

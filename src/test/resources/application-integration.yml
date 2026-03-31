@@ -17,7 +17,7 @@ kafka:
   topic:
     input: test-input-topic
     output: test-output-topic
-    siphon: test-siphon-topic
+    siphon-bde: test-siphon-bde-topic
   producer:
     transactional-id-prefix: kafkaprocessor-test-tx
 
@@ -25,6 +25,8 @@ app:
   processing:
     delay-ms: 0
     worker-threads: 2
+  siphon:
+    enabled: [bde]
 
 server:
   port: 0

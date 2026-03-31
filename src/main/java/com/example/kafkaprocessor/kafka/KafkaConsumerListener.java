@@ -5,12 +5,17 @@ import com.example.kafkaprocessor.deadletter.DeadLetterService;
 import com.example.kafkaprocessor.deadletter.ReasonCode;
 import com.example.kafkaprocessor.logging.MdcContext;
 import com.example.kafkaprocessor.model.KafkaMessage;
+import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
+
+import java.util.List;
+import java.util.Optional;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -34,6 +39,7 @@ public class KafkaConsumerListener {
     private final KafkaProducerService kafkaProducerService;
     private final DeadLetterService deadLetterService;
     private final ScheduledExecutorService processingScheduler;
+    private final List<SiphonEvaluator> siphonEvaluators;
 
     // In-memory set of messageIds currently in-flight (consumer thread → worker thread).
     // add() returns false if already present → duplicate detected in nanoseconds with no DB call.
@@ -48,13 +54,15 @@ public class KafkaConsumerListener {
                                  MessageProcessorService messageProcessorService,
                                  KafkaProducerService kafkaProducerService,
                                  DeadLetterService deadLetterService,
-                                 ScheduledExecutorService processingScheduler) {
+                                 ScheduledExecutorService processingScheduler,
+                                 @Qualifier("activeSiphonEvaluators") List<SiphonEvaluator> siphonEvaluators) {
         this.objectMapper = objectMapper;
         this.controlService = controlService;
         this.messageProcessorService = messageProcessorService;
         this.kafkaProducerService = kafkaProducerService;
         this.deadLetterService = deadLetterService;
         this.processingScheduler = processingScheduler;
+        this.siphonEvaluators = siphonEvaluators;
     }
 
     @KafkaListener(topics = "${kafka.topic.input}", containerFactory = "kafkaListenerContainerFactory")
@@ -74,17 +82,29 @@ public class KafkaConsumerListener {
         String interactionId = message.event() != null ? message.event().interactionId() : null;
         String messageId = message.body() != null ? message.body().messageId() : null;
 
+        // --- Validate messageId is a well-formed UUID ---
+        if (messageId == null || !isValidUuid(messageId)) {
+            log.error("Invalid or missing messageId, routing to dead letter: messageId={}", messageId);
+            deadLetterService.handle(rawPayload, ReasonCode.INVALID_MESSAGE_ID, messageId, interactionId);
+            return; // no ack — partition will stall until restarted with DLQ skip logic
+        }
+
         MdcContext.set(interactionId, messageId);
         try {
             log.info("Message received");
 
-            // --- BDE siphon (fast-path before any other processing) ---
-            // BDE messages are forwarded as-is to the siphon topic and acked immediately.
-            // They bypass the delay, duplicate gate, and processing pipeline.
-            if (message.event() != null && "BDE".equals(message.event().eventType())) {
-                log.info("BDE event type detected, siphoning to siphon topic");
+            // --- Siphon fast-path (before any other processing) ---
+            // Each SiphonEvaluator returns a topic name or empty. First match wins.
+            // To add a route: implement SiphonEvaluator, register as @Component, add code to app.siphon.enabled.
+            Optional<String> siphonTopic = siphonEvaluators.stream()
+                    .map(e -> e.evaluate(message))
+                    .filter(Optional::isPresent)
+                    .findFirst()
+                    .orElse(Optional.empty());
+            if (siphonTopic.isPresent()) {
+                log.info("Siphon triggered, routing to topic={}", siphonTopic.get());
                 try {
-                    kafkaProducerService.siphon(message);
+                    kafkaProducerService.siphon(message, siphonTopic.get());
                 } catch (Exception e) {
                     log.error("Siphon publish failed", e);
                     return; // no ack — redelivery
@@ -193,6 +213,16 @@ public class KafkaConsumerListener {
                 inFlightIds.remove(messageId);
             }
             MdcContext.clear();
+        }
+    }
+
+    private static boolean isValidUuid(String value) {
+        if (value == null || value.length() != 36) return false;
+        try {
+            java.util.UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 }

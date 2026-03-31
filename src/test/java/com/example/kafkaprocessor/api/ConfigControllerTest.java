@@ -1,0 +1,54 @@
+package com.example.kafkaprocessor.api;
+
+import com.example.kafkaprocessor.config.AppProperties;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+
+import java.util.List;
+
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@WebMvcTest(ConfigController.class)
+@TestPropertySource(properties = {
+        "kafka.bootstrap-servers=localhost:9092",
+        "kafka.consumer.group-id=test-group",
+        "kafka.consumer.concurrency=1",
+        "kafka.topic.input=input-topic",
+        "kafka.topic.output=output-topic"})
+class ConfigControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockitoBean
+    private AppProperties appProperties;
+
+    @Test
+    void getConfig_returnsAllCurrentSettings() throws Exception {
+        AppProperties.Processing processing = new AppProperties.Processing();
+        processing.setDelayMs(20000);
+        processing.setWorkerThreads(240);
+        AppProperties.Siphon siphon = new AppProperties.Siphon();
+        siphon.setEnabled(List.of("bde"));
+        when(appProperties.getProcessing()).thenReturn(processing);
+        when(appProperties.getSiphon()).thenReturn(siphon);
+
+        mockMvc.perform(get("/api/config"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kafka.bootstrapServers").value("localhost:9092"))
+                .andExpect(jsonPath("$.kafka.consumerGroupId").value("test-group"))
+                .andExpect(jsonPath("$.kafka.consumerConcurrency").value(1))
+                .andExpect(jsonPath("$.kafka.inputTopic").value("input-topic"))
+                .andExpect(jsonPath("$.kafka.outputTopic").value("output-topic"))
+                .andExpect(jsonPath("$.app.processingDelayMs").value(20000))
+                .andExpect(jsonPath("$.app.processingWorkerThreads").value(240))
+                .andExpect(jsonPath("$.app.siphonEnabledEvaluators[0]").value("bde"));
+    }
+}

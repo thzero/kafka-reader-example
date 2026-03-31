@@ -38,6 +38,9 @@ class QueryControllerTest {
     @MockitoBean
     private DeadLetterRepository deadLetterRepository;
 
+    private static final String MSG_ID_1 = "00000000-0000-0000-0000-000000000001";
+    private static final String MSG_ID_2 = "00000000-0000-0000-0000-000000000002";
+
     @Test
     void getInbound_noParams_defaultsToLast12Hours() throws Exception {
         when(receivedRecordRepository.findByReceivedAtGreaterThanEqual(any(Instant.class)))
@@ -52,7 +55,7 @@ class QueryControllerTest {
     @Test
     void getInbound_withBothParams_appliesRange() throws Exception {
         ReceivedRecord record = new ReceivedRecord();
-        record.setMessageId("msg-1");
+        record.setMessageId(MSG_ID_1);
         record.setInteractionId("iid-1");
         record.setReceivedAt(Instant.now());
 
@@ -66,7 +69,7 @@ class QueryControllerTest {
                         .param("startTimestamp", start)
                         .param("endTimestamp", end))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].messageId").value("msg-1"));
+                .andExpect(jsonPath("$[0].messageId").value(MSG_ID_1));
     }
 
     @Test
@@ -94,7 +97,7 @@ class QueryControllerTest {
     @Test
     void getDeadLetter_withBothParams_appliesRange() throws Exception {
         DeadLetterRecord record = new DeadLetterRecord();
-        record.setMessageId("msg-2");
+        record.setMessageId(MSG_ID_2);
         record.setInteractionId("iid-2");
         record.setReasonCode(ReasonCode.PUBLISH_ERROR);
         record.setRawPayload("{}");
@@ -110,7 +113,7 @@ class QueryControllerTest {
                         .param("startTimestamp", start)
                         .param("endTimestamp", end))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].messageId").value("msg-2"))
+                .andExpect(jsonPath("$[0].messageId").value(MSG_ID_2))
                 .andExpect(jsonPath("$[0].reasonCode").value("PUBLISH_ERROR"));
     }
 }

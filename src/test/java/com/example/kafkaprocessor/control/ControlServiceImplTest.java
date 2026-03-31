@@ -25,34 +25,39 @@ class ControlServiceImplTest {
     @Autowired
     private PublishedRecordRepository publishedRepository;
 
+    private static final String MSG_ID_1 = "00000000-0000-0000-0000-000000000001";
+    private static final String MSG_ID_2 = "00000000-0000-0000-0000-000000000002";
+    private static final String MSG_ID_3 = "00000000-0000-0000-0000-000000000003";
+
     @Test
     void recordReceived_persistsRecordWithCorrectFields() {
-        controlService.recordReceived("msg-1", "interaction-1");
+        controlService.recordReceived(MSG_ID_1, "interaction-1");
 
         List<ReceivedRecord> records = receivedRepository.findAll();
         assertThat(records).hasSize(1);
         ReceivedRecord record = records.get(0);
-        assertThat(record.getMessageId()).isEqualTo("msg-1");
+        assertThat(record.getMessageId()).isEqualTo(MSG_ID_1);
         assertThat(record.getInteractionId()).isEqualTo("interaction-1");
         assertThat(record.getReceivedAt()).isNotNull();
     }
 
     @Test
     void recordReceived_duplicateMessageId_throwsDataIntegrityViolation() {
-        controlService.recordReceived("msg-dup", "interaction-1");
+        String msgId = "00000000-0000-0000-0000-0000000000dd";
+        controlService.recordReceived(msgId, "interaction-1");
 
-        assertThatThrownBy(() -> controlService.recordReceived("msg-dup", "interaction-2"))
+        assertThatThrownBy(() -> controlService.recordReceived(msgId, "interaction-2"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void recordPublished_persistsRecordWithCorrectFields() {
-        controlService.recordPublished("msg-2", "interaction-2");
+        controlService.recordPublished(MSG_ID_2, "interaction-2");
 
         List<PublishedRecord> records = publishedRepository.findAll();
         assertThat(records).hasSize(1);
         PublishedRecord record = records.get(0);
-        assertThat(record.getMessageId()).isEqualTo("msg-2");
+        assertThat(record.getMessageId()).isEqualTo(MSG_ID_2);
         assertThat(record.getInteractionId()).isEqualTo("interaction-2");
         assertThat(record.getPublishedAt()).isNotNull();
     }
@@ -60,10 +65,10 @@ class ControlServiceImplTest {
     @Test
     void findByReceivedAtGreaterThanEqual_returnsRecordsInRange() {
         Instant before = Instant.now().minusSeconds(60);
-        controlService.recordReceived("msg-3", "interaction-3");
+        controlService.recordReceived(MSG_ID_3, "interaction-3");
 
         List<ReceivedRecord> results = receivedRepository.findByReceivedAtGreaterThanEqual(before);
         assertThat(results).hasSize(1);
-        assertThat(results.get(0).getMessageId()).isEqualTo("msg-3");
+        assertThat(results.get(0).getMessageId()).isEqualTo(MSG_ID_3);
     }
 }

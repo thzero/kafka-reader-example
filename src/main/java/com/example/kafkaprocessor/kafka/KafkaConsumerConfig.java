@@ -1,7 +1,10 @@
 package com.example.kafkaprocessor.kafka;
 
+import com.example.kafkaprocessor.config.AppProperties;
+import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,6 +14,7 @@ import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -60,5 +64,26 @@ public class KafkaConsumerConfig {
     @Bean
     public ScheduledExecutorService processingScheduler() {
         return Executors.newScheduledThreadPool(workerThreads);
+    }
+
+    /**
+     * Builds the ordered list of {@link SiphonEvaluator}s active at runtime.
+     *
+     * <p>All registered evaluators are collected via {@link ObjectProvider}. If
+     * {@code app.siphon.enabled} is non-empty, only evaluators whose
+     * {@link SiphonEvaluator#eventCode()} appears in that list are retained.
+     */
+    @Bean
+    public List<SiphonEvaluator> activeSiphonEvaluators(
+            ObjectProvider<SiphonEvaluator> allEvaluators,
+            AppProperties appProperties) {
+        List<SiphonEvaluator> all = allEvaluators.stream().toList();
+        List<String> enabled = appProperties.getSiphon().getEnabled();
+        if (enabled.isEmpty()) {
+            return all;
+        }
+        return all.stream()
+                .filter(e -> enabled.contains(e.eventCode()))
+                .toList();
     }
 }

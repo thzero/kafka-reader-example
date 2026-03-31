@@ -10,11 +10,21 @@
 - Every message is a JSON envelope with two top-level properties:
   - **`event`** — header/metadata object containing:
     - `interactionId` — unique identifier for the interaction; used as the correlation ID for all logging
-    - `eventType` — the type/category of the event
+    - `eventType` — the type/category of the event; see known event types below
+    - `backdated` — optional boolean flag; when `true` combined with `eventType: END`, the message is a **Backdated Endorsement**
   - **`body`** — payload object containing:
     - `messageId` — unique identifier for the message; used in control records and dead letter records
 - Both `event` and `body` must be deserialized into strongly-typed Java objects
 - `interactionId` must be propagated through the entire processing lifecycle (logging, control records, dead letter)
+
+### Event Types
+
+| Code | Name | Notes |
+|------|------|-------|
+| `NC`  | New Business | Standard new policy intake |
+| `END` | Endorsement | Policy modification; if `backdated=true` this is a **Backdated Endorsement** — siphoned directly to `kafka.topic.siphon` on the consumer thread, bypassing all processing |
+| `TRM` | Termination | Policy cancellation/termination |
+| `RNW` | Renewal | Policy renewal |
 
 ### Throughput & Scalability
 - Must sustain a minimum of 1,000,000 messages per day (~12 msg/sec average; must handle burst capacity above this)
@@ -46,7 +56,7 @@
 ### Message Processing
 - Message payloads are JSON; deserialization must be handled on ingest
 - Upon successful deserialization, the message is checked for a **BDE event type siphon** before any other processing
-- If `event.eventType == "BDE"`, the message is published as-is to `kafka.topic.siphon` and acked immediately; it **bypasses the delay, duplicate gate, and processing pipeline entirely**. A siphon publish failure returns without ack (triggers redelivery).
+- If `event.eventType == "END"` and `event.backdated == true` (Backdated Endorsement), the message is published as-is to `kafka.topic.siphon` and acked immediately; it **bypasses the delay, duplicate gate, and processing pipeline entirely**. A siphon publish failure returns without ack (triggers redelivery).
 - When the consumer thread receives a non-BDE message it first checks the **in-memory in-flight set** (`ConcurrentHashMap`) for the `messageId`; if already present it is a duplicate — route to DUPLICATE dead letter and ack. If not present, the ID is added to the set and the work is scheduled for deferred execution. No DB call happens on the consumer thread.
 - When the worker thread fires and processing actually begins, `ControlService.recordReceived()` is called first (DB INSERT with unique constraint), then processing proceeds — `RECEIVED` represents "processing started"; a `ReceivedRecord` with no matching `PublishedRecord` in reconciliation jobs indicates a genuine processing failure
 - Each message is processed independently and in a concurrent fashion
