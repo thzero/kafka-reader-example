@@ -402,7 +402,7 @@ gradle bootRun
 Generation of messages...
 
 ```bash
-# Default: 50 messages with default distribution
+# Default: 1000 messages with default distribution
 gradle generateMessages
 
 # Custom count
@@ -417,6 +417,18 @@ gradle generateMessages -Pcount=100 -PpctBDE=40
 # Custom output directory
 gradle generateMessages -Pcount=50 -PoutDir=C:/test-payloads
 ```
+
+Output is written to a single JSONL file (`build/generated-messages/messages-<count>.jsonl`) with one JSON object per line, ready to send directly to Kafka.
+
+**Windows shortcut — `gen-messages.cmd`:**
+
+```bat
+gen-messages.cmd                         :: 1000 messages, default distribution
+gen-messages.cmd 500                     :: 500 messages, default distribution
+gen-messages.cmd 200 10 60 10 20 15      :: count pctNC pctEND pctTRM pctRNW pctBDE
+```
+
+Arguments are positional and all optional — only the ones provided are passed to Gradle.
 
 ---
 
