@@ -541,6 +541,26 @@ docker compose down        # stop containers, keep volumes
 docker compose down -v     # stop containers AND delete all data
 ```
 
+#### Resetting topics
+
+Use this to clear messages from a topic between test runs without restarting the whole stack.
+
+**Delete a topic** (auto-recreated on next produce/consume since `auto.create.topics.enable=true`):
+```powershell
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic input-topic
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic output-topic
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic siphon-bde-topic
+```
+
+**Reset consumer group offset to beginning** (re-read all existing messages without deleting them — app must be stopped first):
+```powershell
+docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh `
+  --bootstrap-server localhost:9092 `
+  --group kafka-processor-group `
+  --topic input-topic `
+  --reset-offsets --to-earliest --execute
+```
+
 ### 2. Build and run all tests
 
 ```bash
@@ -549,19 +569,26 @@ docker compose down -v     # stop containers AND delete all data
 
 ### 3. Run the application
 
-The active Spring profile controls which metrics backend is used:
+Two independent profile axes control behaviour at startup:
 
-| Profile | Where | How metrics are exported |
-|---------|-------|--------------------------|
-| `prometheus` *(default)* | Home / local | `/actuator/prometheus` scraped by local Docker Prometheus |
-| `datadog` | Work | Pushed to Datadog API every 10s — requires `DD_API_KEY` |
+| Axis | Profile | Effect |
+|------|---------|--------|
+| **Metrics** | `prometheus` *(default)* | `/actuator/prometheus` scraped by local Docker Prometheus |
+| **Metrics** | `datadog` | Pushes metrics to Datadog every 10s — requires `DD_API_KEY` |
+| **Logging** | `local` *(default)* | Human-readable log lines (`HH:mm:ss LEVEL logger interactionId messageId message`) |
+| **Logging** | *(omit `local`)* | Structured JSON via logstash-logback-encoder — for CI / production |
 
-**Local (Prometheus — default):**
+**Local dev (readable logs + Prometheus — default):**
 ```powershell
 .\gradlew bootRun
 ```
 
-**Work (Datadog):**
+**Local dev with JSON logs (e.g. testing log aggregation):**
+```powershell
+.\gradlew bootRun --args='--spring.profiles.active=prometheus'
+```
+
+**Work (Datadog, JSON logs):**
 ```powershell
 $env:DD_API_KEY = "your-api-key"
 $env:SPRING_PROFILES_ACTIVE = "datadog"

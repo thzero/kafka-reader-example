@@ -152,6 +152,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 1. Create `KafkaConsumerConfig` bean:
    - `enable.auto.commit=false`, `AckMode.MANUAL_IMMEDIATE`
    - **`isolation.level=read_committed`** — EOS; only reads messages from committed transactions
+   - **`auto.offset.reset=earliest`** — when a consumer group has no committed offset (first run, new group, or topic recreated), read from the beginning of the topic rather than skipping existing messages
    - `ErrorHandlingDeserializer` wrapping `JsonDeserializer` for value
    - `groupId` and `concurrency` from properties
    - Create a `ScheduledExecutorService` bean (`processingScheduler`) with `app.processing.worker-threads` threads

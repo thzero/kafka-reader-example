@@ -8,6 +8,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.Objects;
+import java.util.concurrent.ExecutionException;
 
 /**
  * Unified Kafka publisher.
@@ -48,12 +49,15 @@ public class KafkaProducerService {
         Objects.requireNonNull(topic, "topic must not be null");
         Objects.requireNonNull(payload, "payload must not be null");
         kafkaTemplate.executeInTransaction(ops -> {
-            ops.send(topic, key, payload).whenComplete((result, ex) -> {
-                if (ex != null) {
-                    throw new KafkaPublishException(
-                            "Failed to publish to topic=" + topic + " key=" + key, ex);
-                }
-            });
+            try {
+                ops.send(topic, key, payload).get();
+            } catch (ExecutionException e) {
+                throw new KafkaPublishException(
+                        "Failed to publish to topic=" + topic + " key=" + key, e.getCause());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new KafkaPublishException("Interrupted publishing to topic=" + topic, e);
+            }
             return null;
         });
         log.info("Published to topic={} key={}", topic, key);
@@ -73,12 +77,15 @@ public class KafkaProducerService {
         Objects.requireNonNull(topic, "topic must not be null");
         Objects.requireNonNull(payload, "payload must not be null");
         jsonKafkaTemplate.executeInTransaction(ops -> {
-            ops.send(topic, key, payload).whenComplete((result, ex) -> {
-                if (ex != null) {
-                    throw new KafkaPublishException(
-                            "Failed to publish to topic=" + topic + " key=" + key, ex);
-                }
-            });
+            try {
+                ops.send(topic, key, payload).get();
+            } catch (ExecutionException e) {
+                throw new KafkaPublishException(
+                        "Failed to publish to topic=" + topic + " key=" + key, e.getCause());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new KafkaPublishException("Interrupted publishing to topic=" + topic, e);
+            }
             return null;
         });
         log.info("Published to topic={} key={}", topic, key);

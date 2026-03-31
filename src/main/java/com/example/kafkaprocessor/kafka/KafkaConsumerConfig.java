@@ -41,6 +41,7 @@ public class KafkaConsumerConfig {
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         return new DefaultKafkaConsumerFactory<>(props);
@@ -61,7 +62,7 @@ public class KafkaConsumerConfig {
     // consumer to keep pulling messages while prior messages wait out their delay.
     // Size this to: expected in-flight messages during the delay window.
     // Example: 100 msg/sec * 20s delay = 2000 in-flight → set worker-threads >= 2000.
-    @Bean
+    @Bean(destroyMethod = "shutdown")
     public ScheduledExecutorService processingScheduler() {
         return Executors.newScheduledThreadPool(workerThreads);
     }

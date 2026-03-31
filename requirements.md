@@ -34,6 +34,7 @@
 - No duplicate messages may be processed; each `messageId` must be handled exactly once
 - Deduplication is enforced via **Kafka exactly-once semantics (EOS)**:
   - Consumer is configured with `isolation.level=read_committed` — only reads messages from committed transactions
+  - Consumer is configured with `auto.offset.reset=earliest` — when a consumer group starts with no committed offset (first run, new group, or topic recreated), it reads from the beginning of the topic rather than skipping existing messages
   - Producer is configured as a **transactional producer** with a unique `transactional-id` per instance
   - The consumer-to-producer flow operates within a single Kafka transaction — the input read and output publish either both commit or both roll back
 - If a duplicate `messageId` is detected despite EOS (e.g., a replayed message), it must be routed to the Dead Letter Component with reason code `DUPLICATE`
