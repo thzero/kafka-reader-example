@@ -1,0 +1,246 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": { "list": [] },
+  "description": "Kafka Processor — pipeline throughput, latency, dead letters, and JVM/system resources",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Pipeline Throughput",
+      "type": "row"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "reqps"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "failed" },  "properties": [{ "id": "color", "value": { "fixedColor": "red",    "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "siphoned" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "rate(kafka_processor_messages_received_total[1m])",  "legendFormat": "received",  "refId": "A" },
+        { "expr": "rate(kafka_processor_messages_published_total[1m])", "legendFormat": "published", "refId": "B" },
+        { "expr": "rate(kafka_processor_messages_siphoned_total[1m])",  "legendFormat": "siphoned",  "refId": "C" },
+        { "expr": "rate(kafka_processor_messages_failed_total[1m])",    "legendFormat": "failed",    "refId": "D" }
+      ],
+      "title": "Message Rate (msg/s)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "kafka_processor_messages_received_total - kafka_processor_messages_published_total - kafka_processor_messages_failed_total",
+          "legendFormat": "in-flight (est.)",
+          "refId": "A"
+        }
+      ],
+      "title": "In-Flight Messages (est.)",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 101,
+      "title": "Latency",
+      "type": "row"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "s", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(kafka_processor_e2e_latency_seconds_bucket[1m]))", "legendFormat": "P50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, rate(kafka_processor_e2e_latency_seconds_bucket[1m]))", "legendFormat": "P95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, rate(kafka_processor_e2e_latency_seconds_bucket[1m]))", "legendFormat": "P99", "refId": "C" }
+      ],
+      "title": "E2E Latency (includes scheduled delay)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "s", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "id": 4,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(kafka_processor_pipeline_latency_seconds_bucket[1m]))", "legendFormat": "P50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, rate(kafka_processor_pipeline_latency_seconds_bucket[1m]))", "legendFormat": "P95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, rate(kafka_processor_pipeline_latency_seconds_bucket[1m]))", "legendFormat": "P99", "refId": "C" }
+      ],
+      "title": "Pipeline Latency (worker execution only)",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 102,
+      "title": "Dead Letters",
+      "type": "row"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 19 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "rate(kafka_processor_messages_failed_total[1m])", "legendFormat": "{{reason}}", "refId": "A" }
+      ],
+      "title": "Dead Letter Rate by Reason Code",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 103,
+      "title": "CPU & Memory",
+      "type": "row"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "process_cpu_usage",  "legendFormat": "JVM process CPU", "refId": "A" },
+        { "expr": "system_cpu_usage",   "legendFormat": "System CPU",      "refId": "B" }
+      ],
+      "title": "CPU Usage",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})",    "legendFormat": "heap used",     "refId": "A" },
+        { "expr": "sum(jvm_memory_max_bytes{area=\"heap\"})",     "legendFormat": "heap max",      "refId": "B" },
+        { "expr": "sum(jvm_memory_used_bytes{area=\"nonheap\"})", "legendFormat": "non-heap used", "refId": "C" }
+      ],
+      "title": "JVM Memory",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.7 },
+            { "color": "red", "value": 0.9 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 36 },
+      "id": 8,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+      "targets": [
+        { "expr": "sum(jvm_memory_used_bytes{area=\"heap\"}) / sum(jvm_memory_max_bytes{area=\"heap\"})", "legendFormat": "Heap %", "refId": "A" }
+      ],
+      "title": "Heap Utilization",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 36 },
+      "id": 9,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "jvm_threads_live_threads",   "legendFormat": "live",   "refId": "A" },
+        { "expr": "jvm_threads_daemon_threads", "legendFormat": "daemon", "refId": "B" },
+        { "expr": "jvm_threads_peak_threads",   "legendFormat": "peak",   "refId": "C" }
+      ],
+      "title": "JVM Threads",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "s", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 36 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, rate(jvm_gc_pause_seconds_bucket[1m]))", "legendFormat": "GC pause P95", "refId": "A" },
+        { "expr": "rate(jvm_gc_pause_seconds_sum[1m]) / rate(jvm_gc_pause_seconds_count[1m])", "legendFormat": "GC pause avg", "refId": "B" }
+      ],
+      "title": "GC Pause Latency",
+      "type": "timeseries"
+    }
+
+  ],
+
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "tags": ["kafka", "kafka-processor"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Kafka Processor",
+  "uid": "kafka-processor-v1",
+  "version": 1
+}

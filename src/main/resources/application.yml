@@ -90,9 +90,11 @@ management:
       percentiles-histogram:
         kafka.processor.e2e.latency: true
         kafka.processor.pipeline.latency: true
+        jvm.gc.pause: true
       percentiles:
         kafka.processor.e2e.latency: 0.5,0.95,0.99
         kafka.processor.pipeline.latency: 0.5,0.95,0.99
+        jvm.gc.pause: 0.5,0.95,0.99
 
 server:
   port: 8080

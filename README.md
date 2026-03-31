@@ -492,6 +492,36 @@ rate(kafka_processor_messages_failed_total[1m])
 kafka_processor_messages_received_total - kafka_processor_messages_published_total - kafka_processor_messages_failed_total
 ```
 
+**CPU & Memory** (auto-collected by Micrometer — no code changes needed):
+
+```promql
+# JVM process CPU usage (0–1, multiply by 100 for %)
+process_cpu_usage * 100
+
+# System-wide CPU usage across all cores (0–1)
+system_cpu_usage * 100
+
+# JVM heap used vs max
+jvm_memory_used_bytes{area="heap"}
+jvm_memory_max_bytes{area="heap"}
+
+# Heap utilization %
+sum(jvm_memory_used_bytes{area="heap"}) / sum(jvm_memory_max_bytes{area="heap"}) * 100
+
+# Non-heap (Metaspace, code cache, etc.)
+jvm_memory_used_bytes{area="nonheap"}
+
+# GC pause P95 latency
+histogram_quantile(0.95, rate(jvm_gc_pause_seconds_bucket[1m]))
+
+# GC pause rate (how often GC is running)
+rate(jvm_gc_pause_seconds_count[1m])
+
+# Live threads
+jvm_threads_live_threads
+jvm_threads_daemon_threads
+```
+
 To build a dashboard: **Dashboards → New → Add visualization**, paste a query, and save.
 
 #### Stopping the stack
@@ -572,18 +602,13 @@ Requires the `kafka` container to be running. The script copies the JSONL into t
 
 ### 6. Monitor pipeline timings
 
-```powershell
-.\monitor-timings.ps1           # single snapshot
-.\monitor-timings.ps1 -Watch   # refresh every 5 seconds
-```
+Open Grafana at **http://localhost:3000** → Dashboards → **Kafka Processor**.
 
-Reports:
-- **Throughput**: received / published / in-flight / dead letter counts
-- **Latency** (receivedAt → publishedAt): min / avg / P95 / max across all completed messages
-- **Dead letter breakdown** by reason code
-- **In-flight message IDs** (up to 20) — messages received but not yet published
-
-Connects to the REST API at `http://localhost:8080` by default (`-BaseUrl` to override).
+The provisioned dashboard auto-loads and shows:
+- **Throughput**: message rate and in-flight estimate
+- **Latency**: E2E and pipeline P50 / P95 / P99
+- **Dead letters**: rate by reason code
+- **CPU & Memory**: process CPU %, JVM heap, threads, GC pause
 
 ### Full test loop
 
@@ -600,8 +625,8 @@ gen-messages.cmd 100
 # 4. Send them to Kafka
 send-messages.cmd
 
-# 5. Watch the pipeline process them (20s delay before each message is processed)
-.\monitor-timings.ps1 -Watch
+# 5. Watch the pipeline process them in Grafana
+start http://localhost:3000
 ```
 
 While messages are processing, check the UIs:
