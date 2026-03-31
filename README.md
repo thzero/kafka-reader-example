@@ -479,6 +479,39 @@ Arguments are positional and all optional — only the ones provided are passed 
 
 ---
 
+## Bruno API Collection
+
+A [Bruno](https://www.usebruno.com/) collection is included in the `bruno/` folder, covering all REST endpoints and Actuator health/metrics checks.
+
+**Open the collection:**
+1. Install Bruno (free, open-source — [usebruno.com](https://www.usebruno.com/))
+2. In Bruno: **Open Collection** → select the `bruno/` folder
+3. Select the **local** environment (top-right dropdown) — sets `baseUrl` to `http://localhost:8080`
+
+**Requests included:**
+
+| Folder | Request | Endpoint |
+|--------|---------|----------|
+| api | Get Config | `GET /api/config` |
+| api | Get Control Inbound | `GET /api/control/inbound` |
+| api | Get Control Outbound | `GET /api/control/outbound` |
+| api | Get Dead Letter | `GET /api/deadletter` |
+| actuator | Health | `GET /actuator/health` |
+| actuator | Health - Processor Thread Pool | `GET /actuator/health/processorThreadPool` |
+| actuator | Metrics | `GET /actuator/metrics` |
+| actuator | Metrics - E2E Latency | `GET /actuator/metrics/kafka.processor.e2e.latency` |
+| actuator | Metrics - Pipeline Latency | `GET /actuator/metrics/kafka.processor.pipeline.latency` |
+| actuator | Metrics - Messages Received | `GET /actuator/metrics/kafka.processor.messages.received` |
+| actuator | Metrics - Messages Published | `GET /actuator/metrics/kafka.processor.messages.published` |
+| actuator | Metrics - Messages Siphoned | `GET /actuator/metrics/kafka.processor.messages.siphoned` |
+| actuator | Metrics - Messages Failed | `GET /actuator/metrics/kafka.processor.messages.failed` |
+| actuator | Prometheus Scrape | `GET /actuator/prometheus` |
+| actuator | Info | `GET /actuator/info` |
+
+> Optional query parameters (`startTimestamp`, `endTimestamp`, `tag`) are pre-filled but **disabled** by default (prefixed with `~` in the `.bru` files). Enable them in Bruno's Params tab when needed.
+
+---
+
 ## Documentation
 
 | File | Contents |
