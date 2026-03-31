@@ -8,6 +8,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.support.serializer.JsonSerializer;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -38,5 +41,25 @@ public class KafkaProducerConfig {
     @Bean
     public KafkaTemplate<String, String> kafkaTemplate() {
         return new KafkaTemplate<>(producerFactory());
+    }
+
+    @Bean
+    public ProducerFactory<String, JsonNode> jsonProducerFactory() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
+        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        props.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
+
+        DefaultKafkaProducerFactory<String, JsonNode> factory =
+                new DefaultKafkaProducerFactory<>(props);
+        factory.setTransactionIdPrefix(transactionalIdPrefix + "-json");
+        return factory;
+    }
+
+    @Bean
+    public KafkaTemplate<String, JsonNode> jsonKafkaTemplate() {
+        return new KafkaTemplate<>(jsonProducerFactory());
     }
 }

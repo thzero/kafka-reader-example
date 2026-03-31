@@ -1,9 +1,8 @@
 package com.example.kafkaprocessor.kafka.processor;
 
 import com.example.kafkaprocessor.kafka.KafkaProducerService;
-import com.example.kafkaprocessor.kafka.ProcessingException;
 import com.example.kafkaprocessor.model.KafkaMessage;
-import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,9 +28,9 @@ import org.springframework.stereotype.Component;
  *     @Override public String eventCode() { return "NC"; }
  *
  *     @Override
- *     public void process(KafkaMessage message, String rawPayload) {
- *         // transform message, build output JSON...
- *         publisher.publish(message.body().messageId(), outputJson, outputTopic);
+ *     public void process(KafkaMessage message) {
+ *         // fetch data, build output object...
+ *         publisher.publish(message.body().messageId(), outputObject, outputTopic);
  *     }
  * }
  * }</pre>
@@ -58,15 +57,10 @@ public class DefaultEventProcessor implements EventProcessor {
     }
 
     @Override
-    public void process(KafkaMessage message, String rawPayload) {
+    public void process(KafkaMessage message) {
         String messageId = message.body() != null ? message.body().messageId() : null;
-        String outputJson;
-        try {
-            outputJson = objectMapper.writeValueAsString(message);
-        } catch (JsonProcessingException e) {
-            throw new ProcessingException("Failed to serialize output message for messageId=" + messageId, e);
-        }
         log.info("Publishing processed message messageId={} to topic={}", messageId, outputTopic);
-        publisher.publish(messageId, outputJson, outputTopic);
+        JsonNode payload = objectMapper.valueToTree(message);
+        publisher.publish(messageId, payload, outputTopic);
     }
 }

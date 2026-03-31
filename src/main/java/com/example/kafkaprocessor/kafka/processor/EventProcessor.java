@@ -30,10 +30,13 @@ public interface EventProcessor {
     /**
      * Process the incoming message and publish the result to Kafka.
      *
-     * @param message    the deserialized incoming message
-     * @param rawPayload the original raw JSON string (available for pass-through or logging)
+     * <p>Implementations are responsible for fetching any additional data needed
+     * to produce the output, building the output payload, and calling
+     * {@link com.example.kafkaprocessor.kafka.KafkaProducerService#publish}.
+     *
+     * @param message the deserialized incoming message
      * @throws com.example.kafkaprocessor.kafka.KafkaPublishException if the publish step fails
      * @throws com.example.kafkaprocessor.kafka.ProcessingException   if business logic fails
      */
-    void process(KafkaMessage message, String rawPayload);
+    void process(KafkaMessage message);
 }

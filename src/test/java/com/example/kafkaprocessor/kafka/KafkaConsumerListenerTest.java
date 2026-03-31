@@ -78,7 +78,7 @@ class KafkaConsumerListenerTest {
         awaitScheduler();
 
         verify(controlService).recordReceived(MSG_ID_1, IID_1);
-        verify(messageProcessorService).process(any(), eq(VALID_PAYLOAD));
+        verify(messageProcessorService).process(any());
         verify(controlService).recordPublished(MSG_ID_1, IID_1);
         verify(acknowledgment).acknowledge();
         verifyNoInteractions(deadLetterService);
@@ -132,7 +132,7 @@ class KafkaConsumerListenerTest {
         String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"00000000-0000-0000-0000-0000000000bd\"}}";
         when(siphonEvaluator.evaluate(any())).thenReturn(java.util.Optional.of("test-siphon-topic"));
         doThrow(new KafkaPublishException("siphon failed", new RuntimeException()))
-                .when(kafkaProducerService).publish(any(), any(), any());
+                .when(kafkaProducerService).publish(any(), anyString(), any());
 
         listener.listen(record(bdePayload), acknowledgment);
 
@@ -166,7 +166,7 @@ class KafkaConsumerListenerTest {
 
     @Test
     void processingFailure_routesToDeadLetter_noAck() throws InterruptedException {
-        doThrow(new ProcessingException("boom")).when(messageProcessorService).process(any(), any());
+        doThrow(new ProcessingException("boom")).when(messageProcessorService).process(any());
 
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();
@@ -178,7 +178,7 @@ class KafkaConsumerListenerTest {
     @Test
     void publishFailure_routesToDeadLetter_noAck() throws InterruptedException {
         doThrow(new KafkaPublishException("publish failed", new RuntimeException()))
-                .when(messageProcessorService).process(any(), any());
+                .when(messageProcessorService).process(any());
 
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();

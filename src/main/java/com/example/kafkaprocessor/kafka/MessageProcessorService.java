@@ -52,13 +52,13 @@ public class MessageProcessorService {
      * @throws KafkaPublishException if the processor's publish step fails
      * @throws ProcessingException   if business logic within the processor fails
      */
-    public void process(KafkaMessage message, String rawPayload) {
+    public void process(KafkaMessage message) {
         String eventType = message.event() != null ? message.event().eventType() : null;
         EventProcessor processor = (eventType != null)
                 ? processorsByCode.getOrDefault(eventType, defaultProcessor)
                 : defaultProcessor;
         log.debug("Routing eventType={} to processor={}", eventType, processor.getClass().getSimpleName());
-        processor.process(message, rawPayload);
+        processor.process(message);
     }
 }
 

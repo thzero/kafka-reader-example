@@ -200,7 +200,7 @@ public class KafkaConsumerListener {
             // KafkaPublishException from within the processor maps to PUBLISH_ERROR;
             // any other exception from business logic maps to PROCESSING_ERROR.
             try {
-                messageProcessorService.process(message, rawPayload);
+                messageProcessorService.process(message);
             } catch (KafkaPublishException e) {
                 log.error("Publish failed", e);
                 meterRegistry.counter("kafka.processor.messages.failed", "reason", "PUBLISH_ERROR").increment();
