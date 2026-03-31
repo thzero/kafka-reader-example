@@ -22,8 +22,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 @Component("processorThreadPool")
 public class ProcessorHealthIndicator implements HealthIndicator {
 
-    private static final double WARN_THRESHOLD = 0.80;
-
     private final ScheduledExecutorService processingScheduler;
     private final int workerThreads;
 
