@@ -13,7 +13,7 @@
     - `eventType` — the type/category of the event; see known event types below
     - `backdated` — optional boolean flag; when `true` combined with `eventType: END`, the message is a **Backdated Endorsement**
   - **`body`** — payload object containing:
-    - `messageId` — unique identifier for the message; used in control records and dead letter records
+    - `messageId` — unique identifier for the message; must be a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`); messages with a missing or non-UUID `messageId` are routed to dead letter with reason code `INVALID_MESSAGE_ID`
 - Both `event` and `body` must be deserialized into strongly-typed Java objects
 - `interactionId` must be propagated through the entire processing lifecycle (logging, control records, dead letter)
 
@@ -22,7 +22,7 @@
 | Code | Name | Notes |
 |------|------|-------|
 | `NC`  | New Business | Standard new policy intake |
-| `END` | Endorsement | Policy modification; if `backdated=true` this is a **Backdated Endorsement** — siphoned directly to `kafka.topic.siphon` on the consumer thread, bypassing all processing |
+| `END` | Endorsement | Policy modification; if `backdated=true` this is a **Backdated Endorsement** — siphoned directly to `kafka.topic.siphon-bde` on the consumer thread, bypassing all processing |
 | `TRM` | Termination | Policy cancellation/termination |
 | `RNW` | Renewal | Policy renewal |
 
@@ -56,14 +56,15 @@
 ### Message Processing
 - Message payloads are JSON; deserialization must be handled on ingest
 - Upon successful deserialization, the message is checked for a **BDE event type siphon** before any other processing
-- If `event.eventType == "END"` and `event.backdated == true` (Backdated Endorsement), the message is published as-is to `kafka.topic.siphon` and acked immediately; it **bypasses the delay, duplicate gate, and processing pipeline entirely**. A siphon publish failure returns without ack (triggers redelivery).
+- If `event.eventType == "END"` and `event.backdated == true` (Backdated Endorsement), the message is published as-is to `kafka.topic.siphon-bde` and acked immediately; it **bypasses the delay, duplicate gate, and processing pipeline entirely**. A siphon publish failure returns without ack (triggers redelivery).
+- The siphon routing system is extensible: additional evaluators can be added by implementing the `SiphonEvaluator` interface (methods: `String eventCode()` and `Optional<String> evaluate(KafkaMessage)`) and registering them as `@Component`. Active evaluators are controlled by `app.siphon.enabled` (list of event codes; empty = all active). The consumer uses a `List<SiphonEvaluator>` bean (filtered by active codes) — first match wins.
 - When the consumer thread receives a non-BDE message it first checks the **in-memory in-flight set** (`ConcurrentHashMap`) for the `messageId`; if already present it is a duplicate — route to DUPLICATE dead letter and ack. If not present, the ID is added to the set and the work is scheduled for deferred execution. No DB call happens on the consumer thread.
 - When the worker thread fires and processing actually begins, `ControlService.recordReceived()` is called first (DB INSERT with unique constraint), then processing proceeds — `RECEIVED` represents "processing started"; a `ReceivedRecord` with no matching `PublishedRecord` in reconciliation jobs indicates a genuine processing failure
 - Each message is processed independently and in a concurrent fashion
 - After successful processing, the message is serialized back to JSON and published to a configured Kafka output topic
 - Upon successful publish, the Control Component is invoked to write a `PUBLISHED` control record
 - Offset commit to the input topic is performed only after the output publish and control record write complete successfully
-- Any failure at any stage (deserialization, processing, publish, or control record write) is handed off to the Dead Letter Component
+- Any failure at any stage (deserialization, invalid messageId, processing, publish, or control record write) is handed off to the Dead Letter Component
 - Must delay processing by at least 20 seconds (configurable via `app.processing.delay-ms`) to account for upstream race conditions
 - The delay is implemented using a `ScheduledExecutorService` — the consumer thread schedules the deferred work and returns immediately, so many messages can be waiting out their delay simultaneously without blocking the consumer
 - The number of worker threads in the scheduler is configurable via `app.processing.worker-threads`; size it to handle the maximum number of in-flight messages during the delay window (e.g., 12 msg/sec × 20s = 240 threads)
@@ -84,7 +85,13 @@
 - Any exception raised during message processing or during Kafka output publishing is routed to a **Dead Letter Component**
 - The Dead Letter Component receives and persists:
   - The original message payload as received from the input topic
-  - A `reasonCode` (string/enum) describing the category of failure (e.g., `PROCESSING_ERROR`, `PUBLISH_ERROR`, `DESERIALIZATION_ERROR`)
+  - A `reasonCode` (string/enum) describing the category of failure:
+    - `DESERIALIZATION_ERROR` — message could not be parsed as JSON into the expected structure
+    - `INVALID_MESSAGE_ID` — `body.messageId` is missing or not a valid UUID
+    - `PROCESSING_ERROR` — an exception occurred during the simulated processing step
+    - `PUBLISH_ERROR` — the processed message could not be published to the output topic
+    - `CONTROL_RECORD_ERROR` — a control record (received/processed) could not be persisted
+    - `DUPLICATE` — `messageId` was already processed (in-memory or DB gate)
   - A `messageId` where extractable
   - A `failedAt` timestamp
 - Dead Letter storage implementation is pluggable and will be fully configured later; the interface must be defined now
@@ -131,14 +138,74 @@
   - `endTimestamp` (optional, no default) — filters on `failedAt <= endTimestamp`
 - Response fields per record: `messageId`, `interactionId`, `reasonCode`, `rawPayload`, `failedAt`
 
+#### Configuration View
+- `GET /api/config`
+- Returns the current running configuration as JSON — useful for verifying live config in deployed instances
+- Response fields: `kafka.bootstrapServers`, `kafka.consumerGroupId`, `kafka.consumerConcurrency`, `kafka.inputTopic`, `kafka.outputTopic`, `app.processingDelayMs`, `app.processingWorkerThreads`, `app.siphonEnabledEvaluators`
+- No query parameters
+
 ## Configuration
 - Kafka bootstrap servers, input topic, output topic, `groupId`, and consumer concurrency must all be externally configurable under the `kafka.*` namespace (e.g., `application.yml` / environment variables)
 - Application-specific settings that are not part of Kafka must be externalized under the `app.*` namespace to clearly distinguish them from Kafka/Spring internals:
   - `app.processing.delay-ms` — delay before processing each message (default: `20000`)
   - `app.processing.worker-threads` — size of the scheduled executor thread pool per instance (default: `240`)
+  - `app.siphon.enabled` — list of `SiphonEvaluator` event codes to activate (default: `[bde]`; empty = all active)
+  - `kafka.topic.siphon-{event-code}` — one property per siphon evaluator (e.g. `kafka.topic.siphon-bde`)
 - API server port must be externally configurable (`server.port`)
 - No hardcoded Kafka or environment-specific values in source code
 
 ## Non-Functional
 - Application must be stateless to support horizontal scaling across 10 instances
 - Graceful shutdown must drain in-flight messages before stopping consumers
+
+## Observability
+
+### Metrics (Micrometer + Prometheus)
+- The application must expose Micrometer metrics via Spring Boot Actuator at `/actuator/prometheus`
+- Two timers must be recorded per message that enters the normal pipeline:
+  - `kafka.processor.e2e.latency` (tagged by `eventType`) — started after the in-flight duplicate check, stopped in the worker's `finally` block; captures the full cycle including the scheduled delay
+  - `kafka.processor.pipeline.latency` (tagged by `eventType`) — started at the top of the worker execution, stopped in the same `finally`; captures actual code execution time only
+- Both timers must publish client-side percentiles: P50, P95, P99
+- Four counters must be recorded:
+  - `kafka.processor.messages.received` (tagged by `eventType`) — message entered the normal pipeline
+  - `kafka.processor.messages.published` (tagged by `eventType`) — message successfully processed and acked
+  - `kafka.processor.messages.siphoned` (tagged by `eventType`) — message fast-pathed via siphon
+  - `kafka.processor.messages.failed` (tagged by `reason`) — message dead-lettered at any stage
+
+### Health (Spring Boot Actuator)
+- `GET /actuator/health` must return full component details (`show-details: always`)
+- Built-in indicators must be active: `db` (datasource ping), `diskSpace`, `kafka` (broker connectivity)
+- A custom `ProcessorHealthIndicator` (component name `processorThreadPool`) must report thread pool status:
+  - `UP` — pool utilization < 100%
+  - `OUT_OF_SERVICE` — pool saturated (active threads ≥ configured capacity)
+  - `DOWN` — pool shut down or terminating
+  - Details: `configuredThreads`, `activeThreads`, `poolSize`, `queuedTasks`, `completedTasks`, `utilizationPct`
+- Exposed actuator endpoints: `health`, `info`, `prometheus`, `metrics`
+
+## Developer Tooling
+
+### Test Message Generator (`generateMessages` Gradle task)
+- A Gradle task in `build.gradle` must generate synthetic Kafka message payloads for local testing
+- Parameters (all optional, configurable via `-P` flags):
+  - `count` — number of messages (default: 1000)
+  - `pctNC`, `pctEND`, `pctTRM`, `pctRNW` — percentage distribution by event type; must sum to 100
+  - `pctBDE` — percentage of END events that are backdated (default: 20)
+  - `outDir` — output directory (default: `build/generated-messages`)
+- Output: a single JSONL file (`messages-<count>.jsonl`) with one compact JSON object per line
+- Windows shortcut: `gen-messages.cmd` (positional args: count, pctNC, pctEND, pctTRM, pctRNW, pctBDE)
+
+### Local Kafka Stack (`docker-compose.yml`)
+- A `docker-compose.yml` must provide a complete local test environment:
+  - **Kafka** (KRaft mode, no Zookeeper) on port `9092`
+  - **Kafka UI** on port `8081` (`http://localhost:8081`) — browse all topics, consumer group lag
+  - **Prometheus** on port `9090` — scrapes `/actuator/prometheus` every 5 seconds
+  - **Grafana** on port `3000` (`http://localhost:3000`, admin/admin) — auto-provisioned with Prometheus datasource
+- `send-messages.cmd` — sends a generated JSONL file to the Kafka input topic via `kafka-console-producer` inside the Docker container
+
+### Pipeline Monitor (`monitor-timings.ps1`)
+- A PowerShell script must poll `/actuator/metrics` and report:
+  - Message counts: received / published / siphoned / failed (with estimated in-flight)
+  - E2E latency stats: avg, max, P50, P95, P99 from Micrometer timers
+  - Pipeline latency stats: avg, max, P95 (worker execution only)
+  - Failure breakdown by reason code
+- `-Watch` flag for live refresh; `-Interval` to configure refresh rate; `-BaseUrl` to override target

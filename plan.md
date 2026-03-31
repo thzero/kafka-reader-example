@@ -231,13 +231,14 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 3. *(parallel)* Unit test `KafkaConsumerListener` with mocked dependencies:
    - Happy path: MDC set, `recordReceived` called (on worker), publish called, `recordPublished` called, ack sent
    - Deserialization failure → `DESERIALIZATION_ERROR`, no ack
+   - `INVALID_MESSAGE_ID` — missing or malformed `body.messageId` → dead letter, ack, no output
    - Duplicate `messageId` in-flight — `listen()` called twice with same messageId while first is still scheduled (mock scheduler prevents execution) → `DUPLICATE`, ack and discard
    - Processing failure → `PROCESSING_ERROR`, no ack
    - Processing delay applied — assert message is scheduled with configured `app.processing.delay-ms` and that process/publish/ack run after the delay fires
    - Publish failure → `PUBLISH_ERROR`, no ack
-4. Integration test with `@EmbeddedKafka`:
-   - Produce message to input topic → assert on output topic
-   - Assert `ReceivedRecord` and `PublishedRecord` exist in H2 via their respective repositories
+4. Integration tests with `@EmbeddedKafka` (topics: `test-input-topic`, `test-output-topic`, `test-siphon-bde-topic`):
+   - Produce normal message to input topic → assert on output topic; `ReceivedRecord` + `PublishedRecord` exist in H2
+   - Produce BDE message (`eventType=END`, `backdated=true`) → assert on siphon topic; nothing on output topic; no control records written
 5. Verify structured log output contains `interactionId` and `messageId` fields
 6. *(parallel)* Unit test `QueryController`:
    - `GET /api/control/inbound` with no params — assert `startTimestamp` defaults to now minus 12 hours, `endTimestamp` is open-ended
@@ -248,28 +249,154 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 
 ---
 
+## Phase 11 — UUID Validation & INVALID_MESSAGE_ID Reason Code
+
+**Goal**: Reject messages whose `body.messageId` is missing or not a valid UUID before they enter the processing pipeline.
+
+1. Add `INVALID_MESSAGE_ID` to the `ReasonCode` enum
+2. In `KafkaConsumerListener.processDeferred()`, after deserialization, validate that `body.messageId` matches the UUID pattern (`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+3. On failure: call `DeadLetterService.handle(rawPayload, INVALID_MESSAGE_ID)`, log a warning, ack, return (no further processing)
+4. Add unit test case to `KafkaConsumerListenerTest` covering invalid and missing `messageId`
+
+---
+
+## Phase 12 — Siphon Routing System
+
+**Goal**: Replace single hard-coded BDE siphon check with an extensible, YAML-configurable evaluator chain.
+
+1. Create `SiphonEvaluator` interface in `siphon` package:
+   - `String eventCode()` — short identifier (e.g. `"bde"`)
+   - `Optional<String> evaluate(KafkaMessage message)` — returns target topic or empty
+2. Create `BdeSiphonEvaluator` (annotated `@Component`, event code `"bde"`):
+   - Returns `Optional.of(kafka.topic.siphon-bde)` when `eventType == "END"` and `backdated == true`
+3. Add `app.siphon.enabled` to `application.yml` (list of event codes, default `[bde]`)
+4. Add `AppProperties` configuration-properties class (or expand existing) to bind `app.siphon.enabled`
+5. Create `activeSiphonEvaluators` `@Bean` in a config class: filters the autowired `List<SiphonEvaluator>` by `app.siphon.enabled` (empty list = all active)
+6. In `KafkaConsumerListener.listen()`, iterate `activeSiphonEvaluators`; first evaluator returning a non-empty Optional wins; publish to returned topic and return immediately
+7. Add `kafka.topic.siphon-bde` to `application.yml`
+8. Unit test `BdeSiphonEvaluator` — cover all four combinations of `eventType`/`backdated`; verify `eventCode()` returns `"bde"`
+9. Update `KafkaConsumerListenerTest` siphon cases to exercise the new evaluator list injection path
+
+---
+
+## Phase 13 — Configuration View API
+
+**Goal**: Expose a read-only JSON snapshot of current running configuration for operational visibility.
+
+1. Ensure `AppProperties` (or equivalent `@ConfigurationProperties` class) binds:
+   - `app.processing.delay-ms`, `app.processing.worker-threads`, `app.siphon.enabled`
+2. Create `ConfigController` (`GET /api/config`):
+   - Injects `AppProperties`, `@Value("${kafka.bootstrap-servers}")`, and other kafka props
+   - Returns a flat JSON object with keys: `kafka.bootstrapServers`, `kafka.consumerGroupId`, `kafka.consumerConcurrency`, `kafka.inputTopic`, `kafka.outputTopic`, `app.processingDelayMs`, `app.processingWorkerThreads`, `app.siphonEnabledEvaluators`
+3. Unit test `ConfigControllerTest` — verify all expected fields are present using `MockMvc`
+
+---
+
+## Phase 14 — Micrometer Instrumentation
+
+**Goal**: Instrument `KafkaConsumerListener` with Micrometer timers and counters; expose via Actuator Prometheus endpoint.
+
+1. Add to `build.gradle`:
+   ```groovy
+   implementation 'org.springframework.boot:spring-boot-starter-actuator'
+   implementation 'io.micrometer:micrometer-registry-prometheus'
+   ```
+2. Inject `MeterRegistry` into `KafkaConsumerListener` constructor
+3. Record two `Timer.Sample`s per message:
+   - **e2e**: start in `listen()` after in-flight duplicate check; stop in worker `finally` block; register as `kafka.processor.e2e.latency` tagged with `eventType`
+   - **pipeline**: start at top of `processDeferred()` worker; stop in same `finally` block; register as `kafka.processor.pipeline.latency` tagged with `eventType`
+4. Record four counters (increment at the appropriate point in the flow):
+   - `kafka.processor.messages.received` — tag `eventType`
+   - `kafka.processor.messages.published` — tag `eventType`
+   - `kafka.processor.messages.siphoned` — tag `eventType`
+   - `kafka.processor.messages.failed` — tag `reason` (ReasonCode enum name)
+5. In `application.yml`, configure percentile histograms and percentiles (P50, P95, P99) for both timers; expose `health`, `info`, `prometheus`, `metrics` endpoints
+6. Update `KafkaConsumerListenerTest` to pass `new SimpleMeterRegistry()` as last constructor argument
+
+---
+
+## Phase 15 — Health Monitoring (ProcessorHealthIndicator)
+
+**Goal**: Expose thread pool utilization as a Spring Boot Actuator health component.
+
+1. Create `ProcessorHealthIndicator` in `health` package (implements `HealthIndicator`):
+   - Injects `ScheduledExecutorService processingScheduler` and `@Value("${app.processing.worker-threads:240}")`
+   - Casts executor to `ThreadPoolExecutor` to read `activeCount`, `poolSize`, `queue.size()`, `completedTaskCount`
+   - Status logic: `DOWN` if shut down/terminating; `OUT_OF_SERVICE` if `activeThreads >= configuredThreads`; otherwise `UP`
+   - Details: `configuredThreads`, `activeThreads`, `poolSize`, `queuedTasks`, `completedTasks`, `utilizationPct`
+2. In `application.yml`, set `management.endpoint.health.show-details: always`
+3. Verify via `GET /actuator/health` that `processorThreadPool` component appears in the response
+
+---
+
+## Phase 16 — Developer Test Infrastructure
+
+**Goal**: Make it easy to run the full stack locally and generate/send realistic test data.
+
+### generateMessages Gradle Task
+1. Add `generateMessages` task to `build.gradle`:
+   - Configuration-time properties: `count`, `pctNC`, `pctEND`, `pctTRM`, `pctRNW`, `pctBDE`, `outDir` (all `project.findProperty()` calls **outside** `doLast`)
+   - Outputs a single JSONL file: `<outDir>/messages-<count>.jsonl` (one compact JSON per line)
+   - Each message: valid UUID `messageId`, random `interactionId`, timestamped, `eventType` sampled per configured distribution; END messages randomly marked `backdated=true` per `pctBDE`
+2. Create `gen-messages.cmd` wrapper (passes positional args as Gradle `-P` flags)
+3. Ensure Gradle task captures `project.findProperty()` at configuration time only — not inside `doLast` — to avoid the `Task.project at execution time` deprecation warning
+
+### Docker Compose
+4. Create `docker-compose.yml` with four services:
+   - `kafka`: `apache/kafka:3.9.0`, KRaft mode, port `9092`
+   - `kafka-ui`: `provectuslabs/kafka-ui:latest`, port `8081`, auto-connected to the `kafka` service
+   - `prometheus`: `prom/prometheus:latest`, port `9090`, mounts `./prometheus.yml`; scrapes `host.docker.internal:8080/actuator/prometheus` every 5 s
+   - `grafana`: `grafana/grafana:latest`, port `3000` (admin/admin), mounts `./grafana/provisioning` and auto-provisions Prometheus as default datasource
+5. Create `prometheus.yml` scrape config
+6. Create `grafana/provisioning/datasources/prometheus.yml`
+
+### Send Messages Script
+7. Create `send-messages.cmd`:
+   - Accepts optional JSONL file path; defaults to latest `messages-*.jsonl` in `build/generated-messages`
+   - Copies file into the `kafka` container, then pipes via `docker exec kafka kafka-console-producer`
+
+### Monitor Script
+8. Create `monitor-timings.ps1`:
+   - Reads from `/actuator/metrics` REST API (no DB required)
+   - Displays: message counts (received/published/siphoned/failed), e2e and pipeline latency (avg, max, P50, P95, P99), failure breakdown by reason code
+   - `-Watch` flag, `-Interval` seconds, `-BaseUrl` override
+
+---
+
 ## Component Interaction Flow
 
 ```
 Kafka Input Topic
       │
       ▼
-KafkaConsumerListener
+KafkaConsumerListener.listen()   (Spring Kafka listener thread)
   ├─ Deserialize JSON → KafkaMessage
   ├─ Set MDC (interactionId, messageId)
+  ├─ [SiphonEvaluator chain] → first match? → KafkaProducerService.publish(siphonTopic) → ack, return
+  ├─ In-flight duplicate check (ConcurrentHashMap) → duplicate? → DUPLICATE dead letter, ack, return
+  ├─ Start e2e Timer.Sample
+  ├─ Increment messages.received counter
+  └─ Schedule processDeferred() on ScheduledExecutorService (after delay-ms)
+           │
+           ▼
+KafkaConsumerListener.processDeferred()   (worker thread)
+  ├─ Start pipeline Timer.Sample
   ├─ ControlService.recordReceived()
   ├─ MessageProcessorService.process()
-  ├─ KafkaProducerService.publish()
+  ├─ KafkaProducerService.publish(outputTopic)
   ├─ ControlService.recordPublished()
-  └─ Acknowledgment.acknowledge()
+  ├─ Increment messages.published counter
+  ├─ Acknowledgment.acknowledge()
+  └─ [finally] stop both Timer.Samples; remove from in-flight map
        │
-       └─ [ANY EXCEPTION] → DeadLetterService.handle(rawPayload, reasonCode, ...)
-                                    │
+       └─ [ANY EXCEPTION] → DeadLetterService.handle(rawPayload, reasonCode)
+                                    │          Increment messages.failed counter
                                     ▼
                                H2 (dead_letter_record)
 
-ControlService      → H2 (control_record)
-KafkaProducerService → Kafka Output Topic
+ControlService        → H2 (control_record)
+KafkaProducerService  → Kafka Output Topic / Siphon Topic
+Actuator              → /actuator/health, /actuator/prometheus, /actuator/metrics
 ```
 
 ---
@@ -281,4 +408,6 @@ KafkaProducerService → Kafka Output Topic
 - **Dead Letter does not re-publish to a Kafka DLQ** at this stage — deferred to later config
 - **`MessageProcessorService.process()`** is a stub; business logic filled in separately
 - **Offset is never committed on failure** — partition will replay on restart until DLQ skip logic is added
-- **Concurrency** via Spring Kafka `concurrency` property only; no additional `@Async` executor
+- **Concurrency** via a `ScheduledExecutorService` (configured pool size `app.processing.worker-threads`); Spring Kafka `concurrency` property controls consumer threads; processing is deferred to the executor after an initial delay
+- **Siphon routing** is first-match-wins across the `activeSiphonEvaluators` list; the list is filtered at startup by `app.siphon.enabled`; an empty enabled list activates all registered evaluators
+- **Metrics** are recorded via Micrometer; no external metrics infrastructure required for the app itself — Prometheus and Grafana are provided by the Docker Compose stack for local use
