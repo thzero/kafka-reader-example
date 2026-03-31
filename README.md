@@ -295,7 +295,7 @@ kafka:
     group-id: kafka-processor-group
     concurrency: 1        # threads per instance = partitions ÷ instances (10 ÷ 10 = 1)
   producer:
-    transactional-id: kafkaprocessor-tx-1   # must be unique per instance
+    transactional-id-prefix: kafkaprocessor-tx   # unique prefix per instance; Spring appends a sequence number
   topic:
     input: input-topic
     output: output-topic
@@ -309,6 +309,23 @@ server:
 **Sizing `worker-threads`:** multiply your expected messages/sec by your `delay-ms` in seconds. At 12 msg/sec with a 20-second delay, up to 240 messages can be simultaneously in-flight.
 
 **Sizing `concurrency`:** set to `total partitions ÷ deployed instances`. With 10 partitions across 10 instances, `concurrency: 1` gives each instance exactly one partition. Setting it higher creates idle threads.
+
+**`transactional-id-prefix`:** must be unique per deployed instance. Spring appends a monotonically increasing sequence number to form the full transactional ID. In multi-instance deployments, include an instance identifier in the prefix (e.g. `kafkaprocessor-tx-${INSTANCE_ID}`).
+
+**Database:** the default config uses an H2 in-memory database which is wiped on every restart. For production, replace the `spring.datasource.*` and `spring.jpa.*` blocks with your target database (e.g. PostgreSQL, Oracle, SQL Server) and set `ddl-auto: validate` or `none`:
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/kafkaprocessor
+    username: kafkaprocessor
+    password: secret
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate   # never use create-drop in production
+    show-sql: false
+```
 
 ---
 
