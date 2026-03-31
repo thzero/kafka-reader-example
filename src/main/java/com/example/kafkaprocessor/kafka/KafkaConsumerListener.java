@@ -82,6 +82,13 @@ public class KafkaConsumerListener {
         String interactionId = message.event() != null ? message.event().interactionId() : null;
         String messageId = message.body() != null ? message.body().messageId() : null;
 
+        // --- Validate messageId is a well-formed UUID ---
+        if (messageId == null || !isValidUuid(messageId)) {
+            log.error("Invalid or missing messageId, routing to dead letter: messageId={}", messageId);
+            deadLetterService.handle(rawPayload, ReasonCode.INVALID_MESSAGE_ID, messageId, interactionId);
+            return; // no ack — partition will stall until restarted with DLQ skip logic
+        }
+
         MdcContext.set(interactionId, messageId);
         try {
             log.info("Message received");
@@ -206,6 +213,16 @@ public class KafkaConsumerListener {
                 inFlightIds.remove(messageId);
             }
             MdcContext.clear();
+        }
+    }
+
+    private static boolean isValidUuid(String value) {
+        if (value == null || value.length() != 36) return false;
+        try {
+            java.util.UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 }

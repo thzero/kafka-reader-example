@@ -42,8 +42,11 @@ class KafkaConsumerListenerTest {
     // delay-ms is set to 0 via ReflectionTestUtils so tests run synchronously.
     private ScheduledExecutorService scheduler;
 
+    private static final String MSG_ID_1   = "00000000-0000-0000-0000-000000000001";
+    private static final String IID_1 = "iid-1";
+
     private static final String VALID_PAYLOAD =
-            "{\"event\":{\"interactionId\":\"iid-1\",\"eventType\":\"TEST\"},\"body\":{\"messageId\":\"msg-1\"}}";
+            "{\"event\":{\"interactionId\":\"iid-1\",\"eventType\":\"TEST\"},\"body\":{\"messageId\":\"00000000-0000-0000-0000-000000000001\"}}";
 
     @BeforeEach
     void setUp() {
@@ -70,18 +73,38 @@ class KafkaConsumerListenerTest {
     @Test
     void happyPath_writesControlRecords_publishesAndAcks() throws InterruptedException {
         KafkaMessage processed = new KafkaMessage(
-                new EventHeader("iid-1", "TEST", null), new MessageBody("msg-1"));
+                new EventHeader(IID_1, "TEST", null), new MessageBody(MSG_ID_1));
         when(messageProcessorService.process(any())).thenReturn(processed);
 
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();
 
-        verify(controlService).recordReceived("msg-1", "iid-1");
+        verify(controlService).recordReceived(MSG_ID_1, IID_1);
         verify(messageProcessorService).process(any());
         verify(kafkaProducerService).publish(processed);
-        verify(controlService).recordPublished("msg-1", "iid-1");
+        verify(controlService).recordPublished(MSG_ID_1, IID_1);
         verify(acknowledgment).acknowledge();
         verifyNoInteractions(deadLetterService);
+    }
+
+    @Test
+    void invalidMessageId_routesToDeadLetter_noAck() {
+        String badPayload = "{\"event\":{\"interactionId\":\"iid-1\",\"eventType\":\"TEST\"},\"body\":{\"messageId\":\"not-a-uuid\"}}";
+        listener.listen(record(badPayload), acknowledgment);
+
+        verify(deadLetterService).handle(eq(badPayload), eq(ReasonCode.INVALID_MESSAGE_ID), eq("not-a-uuid"), eq(IID_1));
+        verify(acknowledgment, never()).acknowledge();
+        verifyNoInteractions(controlService, messageProcessorService, kafkaProducerService);
+    }
+
+    @Test
+    void nullMessageId_routesToDeadLetter_noAck() {
+        String noBodyPayload = "{\"event\":{\"interactionId\":\"iid-1\",\"eventType\":\"TEST\"}}";
+        listener.listen(record(noBodyPayload), acknowledgment);
+
+        verify(deadLetterService).handle(eq(noBodyPayload), eq(ReasonCode.INVALID_MESSAGE_ID), isNull(), eq(IID_1));
+        verify(acknowledgment, never()).acknowledge();
+        verifyNoInteractions(controlService, messageProcessorService, kafkaProducerService);
     }
 
     @Test
@@ -96,7 +119,7 @@ class KafkaConsumerListenerTest {
 
     @Test
     void bdeEvent_siphonsToSiphonTopic_acks() throws InterruptedException {
-        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"msg-bde\"}}";
+        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"00000000-0000-0000-0000-0000000000bd\"}}";
         when(siphonEvaluator.evaluate(any())).thenReturn(java.util.Optional.of("test-siphon-topic"));
 
         listener.listen(record(bdePayload), acknowledgment);
@@ -109,7 +132,7 @@ class KafkaConsumerListenerTest {
 
     @Test
     void bdeEvent_siphonFailure_noAck() throws InterruptedException {
-        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"msg-bde\"}}";
+        String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"00000000-0000-0000-0000-0000000000bd\"}}";
         when(siphonEvaluator.evaluate(any())).thenReturn(java.util.Optional.of("test-siphon-topic"));
         doThrow(new KafkaPublishException("siphon failed", new RuntimeException()))
                 .when(kafkaProducerService).siphon(any(), any());
@@ -137,7 +160,7 @@ class KafkaConsumerListenerTest {
         // Second arrival with same messageId — hits in-flight duplicate gate
         l.listen(record(VALID_PAYLOAD), ack2);
 
-        verify(deadLetterService).handle(eq(VALID_PAYLOAD), eq(ReasonCode.DUPLICATE), eq("msg-1"), eq("iid-1"));
+        verify(deadLetterService).handle(eq(VALID_PAYLOAD), eq(ReasonCode.DUPLICATE), eq(MSG_ID_1), eq(IID_1));
         verify(ack2).acknowledge();
         verify(acknowledgment, never()).acknowledge();
         verifyNoInteractions(messageProcessorService, kafkaProducerService, controlService);
@@ -150,7 +173,7 @@ class KafkaConsumerListenerTest {
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();
 
-        verify(deadLetterService).handle(eq(VALID_PAYLOAD), eq(ReasonCode.PROCESSING_ERROR), eq("msg-1"), eq("iid-1"));
+        verify(deadLetterService).handle(eq(VALID_PAYLOAD), eq(ReasonCode.PROCESSING_ERROR), eq(MSG_ID_1), eq(IID_1));
         verify(acknowledgment, never()).acknowledge();
         verify(kafkaProducerService, never()).publish(any());
     }
@@ -158,7 +181,7 @@ class KafkaConsumerListenerTest {
     @Test
     void publishFailure_routesToDeadLetter_noAck() throws InterruptedException {
         KafkaMessage processed = new KafkaMessage(
-                new EventHeader("iid-1", "TEST", null), new MessageBody("msg-1"));
+                new EventHeader(IID_1, "TEST", null), new MessageBody(MSG_ID_1));
         when(messageProcessorService.process(any())).thenReturn(processed);
         doThrow(new KafkaPublishException("publish failed", new RuntimeException()))
                 .when(kafkaProducerService).publish(any());
@@ -166,7 +189,7 @@ class KafkaConsumerListenerTest {
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();
 
-        verify(deadLetterService).handle(eq(VALID_PAYLOAD), eq(ReasonCode.PUBLISH_ERROR), eq("msg-1"), eq("iid-1"));
+        verify(deadLetterService).handle(eq(VALID_PAYLOAD), eq(ReasonCode.PUBLISH_ERROR), eq(MSG_ID_1), eq(IID_1));
         verify(acknowledgment, never()).acknowledge();
         verify(controlService, never()).recordPublished(any(), any());
     }

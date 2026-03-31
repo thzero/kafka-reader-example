@@ -80,7 +80,7 @@ class KafkaIntegrationTest {
         // Act: publish a message to the input topic
         KafkaMessage inputMessage = new KafkaMessage(
                 new EventHeader("iid-integration", "TEST", null),
-                new MessageBody("msg-integration"));
+                new MessageBody("a0000000-0000-0000-0000-000000000001"));
         String payload = objectMapper.writeValueAsString(inputMessage);
 
         Map<String, Object> producerProps = KafkaTestUtils.producerProps(embeddedKafkaBroker);
@@ -95,11 +95,11 @@ class KafkaIntegrationTest {
         assertThat(received).isNotNull();
 
         KafkaMessage outputMessage = objectMapper.readValue(received.value(), KafkaMessage.class);
-        assertThat(outputMessage.body().messageId()).isEqualTo("msg-integration");
+        assertThat(outputMessage.body().messageId()).isEqualTo("a0000000-0000-0000-0000-000000000001");
 
         // Assert: RECEIVED and PUBLISHED control records exist
-        assertThat(receivedRecordRepository.existsByMessageId("msg-integration")).isTrue();
-        assertThat(publishedRecordRepository.existsByMessageId("msg-integration")).isTrue();
+        assertThat(receivedRecordRepository.existsByMessageId("a0000000-0000-0000-0000-000000000001")).isTrue();
+        assertThat(publishedRecordRepository.existsByMessageId("a0000000-0000-0000-0000-000000000001")).isTrue();
 
         container.stop();
         pf.destroy();

@@ -227,6 +227,7 @@ Duplicate detection uses two layers so the consumer thread never touches the dat
 | Code | Trigger |
 |------|---------|
 | `DESERIALIZATION_ERROR` | Message payload is not valid JSON or does not match the expected schema |
+| `INVALID_MESSAGE_ID` | `body.messageId` is missing or is not a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 | `DUPLICATE` | `messageId` already in the in-flight set (same-instance duplicate during delay window), or `DataIntegrityViolationException` from the DB unique constraint (restart/replay duplicate) |
 | `CONTROL_RECORD_ERROR` | Unexpected failure writing the `ReceivedRecord` (not a constraint violation) |
 | `PROCESSING_ERROR` | `MessageProcessorService.process()` threw an exception |
