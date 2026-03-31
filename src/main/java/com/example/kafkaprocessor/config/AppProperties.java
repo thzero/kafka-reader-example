@@ -25,14 +25,20 @@ public class AppProperties {
 
     public static class Processing {
 
-        /** Milliseconds to wait before processing each message. 0 disables the delay. */
-        private long delayMs = 20000;
+        /** Milliseconds the ScheduledExecutorService waits before handing the task to a worker thread. 0 disables. */
+        private long delayMs = 30000;
 
-        /** Worker thread pool size. Size to: msg/sec × delay-ms / 1000. */
-        private int workerThreads = 240;
+        /** Milliseconds the worker thread sleeps before executing business logic (Thread.sleep). 0 disables. */
+        private long workerDelayMs = 20000;
+
+        /** ScheduledThreadPoolExecutor core pool size (virtual threads). Small value sufficient — virtual threads handle I/O waits without blocking carrier threads. */
+        private int workerThreads = 32;
 
         public long getDelayMs() { return delayMs; }
         public void setDelayMs(long delayMs) { this.delayMs = delayMs; }
+
+        public long getWorkerDelayMs() { return workerDelayMs; }
+        public void setWorkerDelayMs(long workerDelayMs) { this.workerDelayMs = workerDelayMs; }
 
         public int getWorkerThreads() { return workerThreads; }
         public void setWorkerThreads(int workerThreads) { this.workerThreads = workerThreads; }

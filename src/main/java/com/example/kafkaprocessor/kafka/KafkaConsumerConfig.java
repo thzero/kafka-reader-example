@@ -48,23 +48,27 @@ public class KafkaConsumerConfig {
     }
 
     @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
+    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory(
+            ConsumerFactory<String, String> consumerFactory) {
         ConcurrentKafkaListenerContainerFactory<String, String> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(consumerFactory());
+        factory.setConsumerFactory(consumerFactory);
         factory.setConcurrency(concurrency);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         return factory;
     }
 
-    // Scheduled thread pool used to defer message processing by the configured delay.
-    // The consumer thread schedules work here and returns immediately, allowing the
-    // consumer to keep pulling messages while prior messages wait out their delay.
-    // Size this to: expected in-flight messages during the delay window.
-    // Example: 100 msg/sec * 20s delay = 2000 in-flight → set worker-threads >= 2000.
+    // Scheduled thread pool backed by virtual threads (Java 21).
+    // Virtual threads are cheap — Thread.sleep and I/O (DB, Kafka) unmount the carrier thread
+    // rather than blocking it, so thousands of in-flight messages have negligible overhead.
+    // worker-threads is still used as the ScheduledThreadPoolExecutor core pool size (i.e. the
+    // number of threads kept alive to fire scheduled tasks on time); it no longer needs to
+    // be sized to the full in-flight message count.
     @Bean(destroyMethod = "shutdown")
     public ScheduledExecutorService processingScheduler() {
-        return Executors.newScheduledThreadPool(workerThreads);
+        return Executors.newScheduledThreadPool(
+                workerThreads,
+                Thread.ofVirtual().name("kafka-worker-", 0).factory());
     }
 
     /**

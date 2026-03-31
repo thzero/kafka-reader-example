@@ -49,8 +49,11 @@ public class KafkaConsumerListener {
     // Cleared in the worker's finally block so redelivered messages can re-enter the pipeline.
     private final Set<String> inFlightIds = ConcurrentHashMap.newKeySet();
 
-    @Value("${app.processing.delay-ms:20000}")
+    @Value("${app.processing.delay-ms:30000}")
     private long processingDelayMs;
+
+    @Value("${app.processing.worker-delay-ms:20000}")
+    private long workerDelayMs;
 
     @Value("${kafka.topic.output}")
     private String outputTopic;
@@ -150,10 +153,10 @@ public class KafkaConsumerListener {
             Timer.Sample e2eSample = Timer.start(meterRegistry);
             meterRegistry.counter("kafka.processor.messages.received", "eventType", eventType).increment();
 
-            // Schedule the remaining work (process → publish → write PUBLISHED → ack) after the
-            // configured delay. The consumer thread returns immediately, freeing it to pull the
-            // next message. Multiple messages can be in-flight simultaneously, each with their
-            // own independent countdown.
+            // Schedule the remaining work (process → publish → write PUBLISHED → ack) immediately.
+            // The consumer thread returns right away, freeing it to pull the next message.
+            // The configured delay is applied as a scheduler delay so the consumer thread
+            // is not blocked — it returns immediately, and processing begins after the delay.
             try {
                 processingScheduler.schedule(
                     () -> processDeferred(rawPayload, message, messageId, interactionId, acknowledgment, mdcSnapshot, e2eSample, eventType),
@@ -190,6 +193,19 @@ public class KafkaConsumerListener {
         }
         Timer.Sample pipelineSample = Timer.start(meterRegistry);
         try {
+            // --- Apply worker-thread delay ---
+            // Runs on the worker thread concurrently with all other in-flight messages.
+            if (workerDelayMs > 0) {
+                try {
+                    TimeUnit.MILLISECONDS.sleep(workerDelayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    log.warn("[PROCESSING] interrupted during worker delay, routing to dead letter");
+                    deadLetterService.handle(rawPayload, ReasonCode.PROCESSING_ERROR, messageId, interactionId);
+                    return;
+                }
+            }
+
             // --- Write RECEIVED control record ---
             // Done on the worker thread so the DB round-trip (Oracle/SQL Server) does not block
             // the consumer thread. DataIntegrityViolationException here means the app restarted

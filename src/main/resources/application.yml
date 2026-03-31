@@ -58,17 +58,22 @@ kafka:
 # -----------------------------------------------------------------------
 app:
   processing:
-    # How long (ms) the processor waits before executing business logic on each message.
-    # This is a deliberate delay to account for upstream race conditions.
-    # It is NOT a Kafka setting — the consumer thread returns immediately after scheduling;
-    # the delay is handled by a ScheduledExecutorService so many messages wait in parallel.
-    # Set to 0 to disable the delay. Default: 20000 (20 seconds).
-    delay-ms: 20000
-    # Number of worker threads in the scheduled processing pool per instance.
-    # Each in-flight message (waiting out its delay) occupies one thread.
-    # Size to: expected message rate (msg/sec) * delay-ms / 1000
-    # Example: 12 msg/sec * 20s = 240 in-flight messages -> set worker-threads >= 240.
-    worker-threads: 240
+    # Scheduler delay (ms): how long the ScheduledExecutorService waits before handing the
+    # task to a worker thread. Consumer thread returns immediately after scheduling.
+    # Use this to throttle how quickly new messages enter the worker pool.
+    # Set to 0 to disable. Default: 30000 (30 seconds).
+    delay-ms: 30000
+    # Worker delay (ms): Thread.sleep inside the worker thread before executing business logic.
+    # Runs concurrently across all in-flight messages on their own worker threads.
+    # Use this to enforce a minimum processing wait (e.g. upstream race condition buffer).
+    # Set to 0 to disable. Default: 20000 (20 seconds).
+    worker-delay-ms: 20000
+    # Core pool size for the ScheduledThreadPoolExecutor (backed by virtual threads).
+    # Virtual threads are cheap: Thread.sleep and I/O unmount the carrier thread rather than
+    # blocking it, so the old msg/sec * delay sizing formula no longer applies.
+    # This value controls how many threads are kept ready to fire scheduled tasks on time.
+    # A small value (e.g. 8-16 * CPU cores) is sufficient for most workloads.
+    worker-threads: 32
   siphon:
     # Event codes of SiphonEvaluator implementations to activate.
     # Matches SiphonEvaluator.eventCode() on each implementation.
