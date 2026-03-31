@@ -23,7 +23,7 @@ A Spring Boot application that consumes messages from a Kafka input topic, appli
 | Code | Name | Notes |
 |------|------|-------|
 | `NC`  | New Business | Standard new policy intake |
-| `END` | Endorsement | Policy modification. When `event.backdated: true`, this is a **Backdated Endorsement** — siphoned directly to `kafka.topic.siphon` on the consumer thread, bypassing the delay, duplicate gate, and processing pipeline. |
+| `END` | Endorsement | Policy modification. When `event.backdated: true`, this is a **Backdated Endorsement (BDE)** — siphoned directly to `kafka.topic.siphon-bde` on the consumer thread, bypassing the delay, duplicate gate, and processing pipeline. |
 | `TRM` | Termination | Policy cancellation/termination |
 | `RNW` | Renewal | Policy renewal |
 
@@ -131,6 +131,60 @@ sequenceDiagram
 
 **Key points:**
 - The **consumer thread makes zero DB calls** — fast operations only (deserialize, BDE siphon check, nanosecond in-memory duplicate check, schedule), then returns immediately
+
+---
+
+## Siphon Routing
+
+The siphon system fast-paths selected messages directly to dedicated Kafka topics on the consumer thread, bypassing the 20-second delay, duplicate gate, and processing pipeline entirely.
+
+### How it works
+
+`KafkaConsumerListener` delegates to a single `SiphonEvaluator` bean. `evaluate(message)` returns:
+- `Optional.of(topicName)` — siphon to that topic and ack immediately
+- `Optional.empty()` — continue through the normal pipeline
+
+### Naming convention
+
+| Thing | Pattern | Example |
+|-------|---------|--------|
+| Evaluator class | `{EventCode}SiphonEvaluator` | `BdeSiphonEvaluator` |
+| YAML property | `kafka.topic.siphon-{event-code}` | `kafka.topic.siphon-bde` |
+| `@Value` annotation | `${kafka.topic.siphon-{event-code}}` | `${kafka.topic.siphon-bde}` |
+
+### Built-in evaluator
+
+| Class | Matches | Topic property |
+|-------|---------|----------------|
+| `BdeSiphonEvaluator` | `eventType=END` + `backdated=true` | `kafka.topic.siphon-bde` |
+
+### Adding a new siphon route
+
+1. Implement `SiphonEvaluator`, inject your topic via `@Value`, annotate with `@Component`:
+   ```java
+   @Component
+   public class TrmSiphonEvaluator implements SiphonEvaluator {
+       private final String topic;
+       public TrmSiphonEvaluator(@Value("${kafka.topic.siphon-trm}") String topic) {
+           this.topic = topic;
+       }
+       @Override
+       public Optional<String> evaluate(KafkaMessage message) {
+           if (message.event() == null) return Optional.empty();
+           return EventType.TRM.equals(message.event().eventType())
+               ? Optional.of(topic) : Optional.empty();
+       }
+   }
+   ```
+
+2. Add the topic key to `application.yml`:
+   ```yaml
+   kafka:
+     topic:
+       siphon-trm: trm-siphon-topic
+   ```
+
+3. If multiple evaluators are active simultaneously, change the `KafkaConsumerListener` injection from a single `SiphonEvaluator` to `List<SiphonEvaluator>` and iterate until the first non-empty result.
 - **All messages are in-flight simultaneously**, each with their own independent 20-second countdown on a separate worker thread
 - The **worker thread pool** is sized to the maximum expected in-flight messages: `msg/sec × delay-ms / 1000` (e.g., 12 msg/sec × 20s = 240 threads)
 - **Acknowledgment happens on the worker thread** after the full pipeline completes — Kafka does not advance the offset until then
@@ -227,7 +281,8 @@ kafka:
   topic:
     input: input-topic
     output: output-topic
-    siphon: siphon-topic    # BDE event-type messages are forwarded here without delay
+    siphon-bde: siphon-bde-topic    # BdeSiphonEvaluator — Backdated Endorsements (END + backdated=true)
+    # siphon-trm: trm-topic         # example: add TrmSiphonEvaluator for TRM events
 
 server:
   port: 8080

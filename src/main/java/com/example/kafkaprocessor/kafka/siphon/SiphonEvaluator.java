@@ -15,7 +15,7 @@ import java.util.Optional;
  * <p>Multiple siphon topics are supported by implementing different evaluators — each
  * returns a different topic name for the messages it matches.
  *
- * <p>Replace or extend the default implementation ({@link BackdatedEndorsementSiphonEvaluator})
+ * <p>Replace or extend the default implementation ({@link BdeSiphonEvaluator})
  * by supplying a different {@code @Primary} or {@code @Qualifier}-targeted Spring bean.
  */
 public interface SiphonEvaluator {

@@ -30,8 +30,10 @@ kafka:
     input: input-topic
     # Topic this application publishes processed messages to
     output: output-topic
-    # Topic BDE event-type messages are siphoned to without delay or further processing
-    siphon: siphon-topic
+    # Siphon topics — one key per SiphonEvaluator implementation.
+    # Naming convention: kafka.topic.siphon-{event-code}
+    # Each evaluator injects its own key via @Value("${kafka.topic.siphon-{code}}").
+    siphon-bde: siphon-bde-topic   # BdeSiphonEvaluator — Backdated Endorsements (END + backdated=true)
 
   producer:
     # Transactional ID prefix for exactly-once semantics (EOS).

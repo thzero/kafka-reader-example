@@ -8,18 +8,21 @@ import org.springframework.stereotype.Component;
 import java.util.Optional;
 
 /**
- * Default {@link SiphonEvaluator} — siphons Backdated Endorsements.
+ * {@link SiphonEvaluator} for Backdated Endorsements (BDE).
  *
  * <p>A message is a Backdated Endorsement when its {@code event.eventType} is
  * {@link EventType#END} and {@code event.backdated} is {@code true}.
- * Matching messages are routed to {@code kafka.topic.siphon}.
+ * Matching messages are routed to {@code kafka.topic.siphon-bde}.
+ *
+ * <p>Naming convention: {@code {EventCode}SiphonEvaluator} / {@code kafka.topic.siphon-{code}}.
+ * Follow the same pattern to add new siphon routes.
  */
 @Component
-public class BackdatedEndorsementSiphonEvaluator implements SiphonEvaluator {
+public class BdeSiphonEvaluator implements SiphonEvaluator {
 
     private final String siphonTopic;
 
-    public BackdatedEndorsementSiphonEvaluator(@Value("${kafka.topic.siphon}") String siphonTopic) {
+    public BdeSiphonEvaluator(@Value("${kafka.topic.siphon-bde}") String siphonTopic) {
         this.siphonTopic = siphonTopic;
     }
 

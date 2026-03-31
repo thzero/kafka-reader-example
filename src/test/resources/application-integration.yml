@@ -17,7 +17,7 @@ kafka:
   topic:
     input: test-input-topic
     output: test-output-topic
-    siphon: test-siphon-topic
+    siphon-bde: test-siphon-bde-topic
   producer:
     transactional-id-prefix: kafkaprocessor-test-tx
 

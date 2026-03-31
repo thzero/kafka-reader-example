@@ -10,10 +10,10 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class BackdatedEndorsementSiphonEvaluatorTest {
+class BdeSiphonEvaluatorTest {
 
-    private static final String TOPIC = "siphon-topic";
-    private final SiphonEvaluator evaluator = new BackdatedEndorsementSiphonEvaluator(TOPIC);
+    private static final String TOPIC = "siphon-bde-topic";
+    private final SiphonEvaluator evaluator = new BdeSiphonEvaluator(TOPIC);
 
     private KafkaMessage message(String eventType, Boolean backdated) {
         return new KafkaMessage(new EventHeader("iid", eventType, backdated), new MessageBody("msg-1"));
