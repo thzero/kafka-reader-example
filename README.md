@@ -399,6 +399,25 @@ gradle test
 gradle bootRun
 ```
 
+Generation of messages...
+
+```bash
+# Default: 50 messages with default distribution
+gradle generateMessages
+
+# Custom count
+gradle generateMessages -Pcount=200
+
+# Custom distribution (must sum to 100)
+gradle generateMessages -Pcount=500 -PpctNC=30 -PpctEND=45 -PpctTRM=5 -PpctRNW=20
+
+# Custom BDE ratio within END events (default 20%)
+gradle generateMessages -Pcount=100 -PpctBDE=40
+
+# Custom output directory
+gradle generateMessages -Pcount=50 -PoutDir=C:/test-payloads
+```
+
 ---
 
 ## Documentation
