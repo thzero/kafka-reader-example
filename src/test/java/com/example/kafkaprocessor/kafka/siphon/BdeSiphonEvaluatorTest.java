@@ -20,6 +20,11 @@ class BdeSiphonEvaluatorTest {
     }
 
     @Test
+    void eventCode_returnsBde() {
+        assertThat(evaluator.eventCode()).isEqualTo("bde");
+    }
+
+    @Test
     void endAndBackdatedTrue_returnsTopicName() {
         assertThat(evaluator.evaluate(message(EventType.END, true)))
                 .isEqualTo(Optional.of(TOPIC));

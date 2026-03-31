@@ -15,10 +15,20 @@ import java.util.Optional;
  * <p>Multiple siphon topics are supported by implementing different evaluators — each
  * returns a different topic name for the messages it matches.
  *
- * <p>Replace or extend the default implementation ({@link BdeSiphonEvaluator})
- * by supplying a different {@code @Primary} or {@code @Qualifier}-targeted Spring bean.
+ * <p>Active evaluators are filtered by {@code app.siphon.enabled} (list of event codes
+ * matching {@link #eventCode()}). An empty list activates all registered evaluators.
+ *
+ * <p>Register new implementations as {@code @Component} beans.
+ * {@code KafkaConsumerListener} iterates the active list in order; the first non-empty
+ * result ends evaluation.
  */
 public interface SiphonEvaluator {
+
+    /**
+     * Short identifier for this evaluator, e.g. {@code "bde"}.
+     * Must match the corresponding entry in {@code app.siphon.enabled}.
+     */
+    String eventCode();
 
     /**
      * Returns the Kafka topic name to siphon this message to, or {@link Optional#empty()}

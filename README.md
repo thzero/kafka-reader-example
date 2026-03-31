@@ -140,9 +140,11 @@ The siphon system fast-paths selected messages directly to dedicated Kafka topic
 
 ### How it works
 
-`KafkaConsumerListener` delegates to a single `SiphonEvaluator` bean. `evaluate(message)` returns:
-- `Optional.of(topicName)` — siphon to that topic and ack immediately
-- `Optional.empty()` — continue through the normal pipeline
+`KafkaConsumerListener` iterates a `List<SiphonEvaluator>` (first match wins). For each evaluator, `evaluate(message)` returns:
+- `Optional.of(topicName)` — siphon to that topic and ack immediately, stopping evaluation
+- `Optional.empty()` — continue to the next evaluator; if none match, the message follows the normal pipeline
+
+Active evaluators are controlled by `app.siphon.enabled` (list of event codes). An empty list activates all registered evaluators.
 
 ### Naming convention
 
@@ -152,11 +154,13 @@ The siphon system fast-paths selected messages directly to dedicated Kafka topic
 | YAML property | `kafka.topic.siphon-{event-code}` | `kafka.topic.siphon-bde` |
 | `@Value` annotation | `${kafka.topic.siphon-{event-code}}` | `${kafka.topic.siphon-bde}` |
 
-### Built-in evaluator
+### Implemented evaluators
 
-| Class | Matches | Topic property |
-|-------|---------|----------------|
-| `BdeSiphonEvaluator` | `eventType=END` + `backdated=true` | `kafka.topic.siphon-bde` |
+| Class | Event code | Matches | Topic property |
+|-------|-----------|---------|----------------|
+| `BdeSiphonEvaluator` | `bde` | `eventType=END` + `backdated=true` | `kafka.topic.siphon-bde` |
+
+Control which are active via `app.siphon.enabled` (empty = all active).
 
 ### Adding a new siphon route
 
@@ -168,6 +172,8 @@ The siphon system fast-paths selected messages directly to dedicated Kafka topic
        public TrmSiphonEvaluator(@Value("${kafka.topic.siphon-trm}") String topic) {
            this.topic = topic;
        }
+       @Override
+       public String eventCode() { return "trm"; }
        @Override
        public Optional<String> evaluate(KafkaMessage message) {
            if (message.event() == null) return Optional.empty();
@@ -184,7 +190,12 @@ The siphon system fast-paths selected messages directly to dedicated Kafka topic
        siphon-trm: trm-siphon-topic
    ```
 
-3. If multiple evaluators are active simultaneously, change the `KafkaConsumerListener` injection from a single `SiphonEvaluator` to `List<SiphonEvaluator>` and iterate until the first non-empty result.
+3. Add the event code to `app.siphon.enabled`:
+   ```yaml
+   app:
+     siphon:
+       enabled: [bde, trm]
+   ```
 - **All messages are in-flight simultaneously**, each with their own independent 20-second countdown on a separate worker thread
 - The **worker thread pool** is sized to the maximum expected in-flight messages: `msg/sec × delay-ms / 1000` (e.g., 12 msg/sec × 20s = 240 threads)
 - **Acknowledgment happens on the worker thread** after the full pipeline completes — Kafka does not advance the offset until then
@@ -259,6 +270,11 @@ Returns dead letter entries — messages that failed at any stage.
 
 Response fields: `messageId`, `interactionId`, `reasonCode`, `rawPayload`, `failedAt`
 
+### `GET /api/config`
+Returns the current running configuration as JSON.
+
+Response fields: `kafka.bootstrapServers`, `kafka.consumerGroupId`, `kafka.consumerConcurrency`, `kafka.inputTopic`, `kafka.outputTopic`, `app.processingDelayMs`, `app.processingWorkerThreads`, `app.siphonEnabledEvaluators`
+
 ---
 
 ## Configuration
@@ -270,6 +286,8 @@ app:
   processing:
     delay-ms: 20000       # ms to wait before processing each message (NOT a Kafka setting)
     worker-threads: 240   # thread pool size = msg/sec × delay-ms / 1000
+  siphon:
+    enabled: [bde]        # event codes of active SiphonEvaluators (empty = all active)
 
 kafka:
   bootstrap-servers: localhost:9092
@@ -300,8 +318,11 @@ server:
 src/main/java/com/example/kafkaprocessor/
 ├── KafkaProcessorApplication.java       # entry point
 ├── api/
-│   ├── QueryController.java             # REST endpoints
+│   ├── ConfigController.java            # GET /api/config — configuration view
+│   ├── QueryController.java             # REST query endpoints
 │   └── TimeRangeHelper.java             # default timestamp resolution
+├── config/
+│   └── AppProperties.java               # @ConfigurationProperties for app.*
 ├── control/
 │   ├── ControlService.java              # interface
 │   ├── ControlServiceImpl.java          # JPA implementation
@@ -316,13 +337,16 @@ src/main/java/com/example/kafkaprocessor/
 │   ├── DeadLetterRepository.java
 │   └── ReasonCode.java                  # enum
 ├── kafka/
-│   ├── KafkaConsumerConfig.java         # consumer + scheduler beans
+│   ├── KafkaConsumerConfig.java         # consumer + scheduler + active evaluator beans
 │   ├── KafkaConsumerListener.java       # @KafkaListener — main pipeline
 │   ├── KafkaProducerConfig.java         # transactional producer bean
 │   ├── KafkaProducerService.java        # publish wrapper
 │   ├── KafkaPublishException.java
 │   ├── MessageProcessorService.java     # business logic (stub — replace this)
-│   └── ProcessingException.java
+│   ├── ProcessingException.java
+│   └── siphon/
+│       ├── SiphonEvaluator.java         # interface — eventCode() + evaluate()
+│       └── BdeSiphonEvaluator.java      # routes END+backdated=true to siphon-bde topic
 ├── logging/
 │   └── MdcContext.java                  # MDC set/clear helpers
 └── model/
@@ -331,11 +355,16 @@ src/main/java/com/example/kafkaprocessor/
     └── MessageBody.java                 # record — messageId
 
 src/test/java/com/example/kafkaprocessor/
-├── api/QueryControllerTest.java         # MVC slice test
+├── api/
+│   ├── ConfigControllerTest.java        # MVC slice test
+│   └── QueryControllerTest.java         # MVC slice test
 ├── control/ControlServiceImplTest.java  # JPA slice test
 ├── deadletter/DeadLetterServiceImplTest.java
 ├── integration/KafkaIntegrationTest.java # @EmbeddedKafka full test
-└── kafka/KafkaConsumerListenerTest.java  # unit test
+└── kafka/
+    ├── KafkaConsumerListenerTest.java    # unit test
+    └── siphon/
+        └── BdeSiphonEvaluatorTest.java   # unit test
 ```
 
 ---

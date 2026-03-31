@@ -27,6 +27,11 @@ public class BdeSiphonEvaluator implements SiphonEvaluator {
     }
 
     @Override
+    public String eventCode() {
+        return "bde";
+    }
+
+    @Override
     public Optional<String> evaluate(KafkaMessage message) {
         if (message.event() == null) {
             return Optional.empty();

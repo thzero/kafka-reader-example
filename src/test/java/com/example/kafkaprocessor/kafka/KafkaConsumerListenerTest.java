@@ -17,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -50,7 +51,7 @@ class KafkaConsumerListenerTest {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         listener = new KafkaConsumerListener(
                 objectMapper, controlService,
-                messageProcessorService, kafkaProducerService, deadLetterService, scheduler, siphonEvaluator);
+                messageProcessorService, kafkaProducerService, deadLetterService, scheduler, List.of(siphonEvaluator));
         // Zero delay so deferred work fires immediately, keeping tests fast and deterministic
         ReflectionTestUtils.setField(listener, "processingDelayMs", 0L);
     }
@@ -126,7 +127,7 @@ class KafkaConsumerListenerTest {
         ScheduledExecutorService nonExecutingScheduler = mock(ScheduledExecutorService.class);
         KafkaConsumerListener l = new KafkaConsumerListener(
                 objectMapper, controlService, messageProcessorService,
-                kafkaProducerService, deadLetterService, nonExecutingScheduler, siphonEvaluator);
+                kafkaProducerService, deadLetterService, nonExecutingScheduler, List.of(siphonEvaluator));
         ReflectionTestUtils.setField(l, "processingDelayMs", 0L);
 
         Acknowledgment ack2 = mock(Acknowledgment.class);

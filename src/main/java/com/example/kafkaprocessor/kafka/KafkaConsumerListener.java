@@ -7,6 +7,7 @@ import com.example.kafkaprocessor.logging.MdcContext;
 import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
 
+import java.util.List;
 import java.util.Optional;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,6 +15,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -37,7 +39,7 @@ public class KafkaConsumerListener {
     private final KafkaProducerService kafkaProducerService;
     private final DeadLetterService deadLetterService;
     private final ScheduledExecutorService processingScheduler;
-    private final SiphonEvaluator siphonEvaluator;
+    private final List<SiphonEvaluator> siphonEvaluators;
 
     // In-memory set of messageIds currently in-flight (consumer thread → worker thread).
     // add() returns false if already present → duplicate detected in nanoseconds with no DB call.
@@ -53,14 +55,14 @@ public class KafkaConsumerListener {
                                  KafkaProducerService kafkaProducerService,
                                  DeadLetterService deadLetterService,
                                  ScheduledExecutorService processingScheduler,
-                                 SiphonEvaluator siphonEvaluator) {
+                                 @Qualifier("activeSiphonEvaluators") List<SiphonEvaluator> siphonEvaluators) {
         this.objectMapper = objectMapper;
         this.controlService = controlService;
         this.messageProcessorService = messageProcessorService;
         this.kafkaProducerService = kafkaProducerService;
         this.deadLetterService = deadLetterService;
         this.processingScheduler = processingScheduler;
-        this.siphonEvaluator = siphonEvaluator;
+        this.siphonEvaluators = siphonEvaluators;
     }
 
     @KafkaListener(topics = "${kafka.topic.input}", containerFactory = "kafkaListenerContainerFactory")
@@ -85,9 +87,13 @@ public class KafkaConsumerListener {
             log.info("Message received");
 
             // --- Siphon fast-path (before any other processing) ---
-            // SiphonEvaluator returns the target topic name, or empty to continue normally.
-            // Adding a new siphon route means adding a new evaluator — no changes here.
-            Optional<String> siphonTopic = siphonEvaluator.evaluate(message);
+            // Each SiphonEvaluator returns a topic name or empty. First match wins.
+            // To add a route: implement SiphonEvaluator, register as @Component, add code to app.siphon.enabled.
+            Optional<String> siphonTopic = siphonEvaluators.stream()
+                    .map(e -> e.evaluate(message))
+                    .filter(Optional::isPresent)
+                    .findFirst()
+                    .orElse(Optional.empty());
             if (siphonTopic.isPresent()) {
                 log.info("Siphon triggered, routing to topic={}", siphonTopic.get());
                 try {

@@ -25,6 +25,8 @@ app:
   processing:
     delay-ms: 0
     worker-threads: 2
+  siphon:
+    enabled: [bde]
 
 server:
   port: 0
