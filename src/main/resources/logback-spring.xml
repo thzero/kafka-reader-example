@@ -1,13 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+
+    <!-- Human-readable format for local development -->
+    <appender name="STDOUT_PLAIN" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%-40logger{40}) %X{interactionId:--} %X{messageId:--} %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Structured JSON for all other environments (prometheus/datadog profiles) -->
+    <appender name="STDOUT_JSON" class="ch.qos.logback.core.ConsoleAppender">
         <encoder class="net.logstash.logback.encoder.LogstashEncoder">
             <includeMdcKeyName>interactionId</includeMdcKeyName>
             <includeMdcKeyName>messageId</includeMdcKeyName>
         </encoder>
     </appender>
 
-    <root level="INFO">
-        <appender-ref ref="STDOUT" />
-    </root>
+    <springProfile name="local">
+        <root level="INFO">
+            <appender-ref ref="STDOUT_PLAIN" />
+        </root>
+    </springProfile>
+
+    <springProfile name="!local">
+        <root level="INFO">
+            <appender-ref ref="STDOUT_JSON" />
+        </root>
+    </springProfile>
+
 </configuration>

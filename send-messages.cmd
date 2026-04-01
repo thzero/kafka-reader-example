@@ -36,9 +36,11 @@ if not exist "%JSONL_FILE%" (
     exit /b 1
 )
 
-:: Count lines in the file
+::  Count lines in the file — find /c outputs "---------- FILE: N", grab last token
 set COUNT=0
-for /f %%L in ('find /c /v "" "%JSONL_FILE%"') do set COUNT=%%L
+for /f "tokens=*" %%L in ('find /c /v "" "%JSONL_FILE%"') do set FIND_OUT=%%L
+for /f "tokens=2 delims=:" %%N in ("!FIND_OUT!") do set COUNT=%%N
+set COUNT=%COUNT: =%
 
 echo Sending %COUNT% messages from %JSONL_FILE% to topic [%TOPIC%]...
 echo.

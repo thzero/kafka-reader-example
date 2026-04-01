@@ -203,6 +203,58 @@ Control which are active via `app.siphon.enabled` (empty = all active).
 
 ---
 
+## Event Processing
+
+After the siphon check, the normal pipeline delegates business logic to an `EventProcessor` implementation selected by `eventType`. This lets each event code have its own processing strategy without changing the listener or pipeline.
+
+### How it works
+
+`MessageProcessorService` is injected with all `@Component` beans that implement `EventProcessor`. At startup it builds a `Map<eventCode, EventProcessor>`. For each message, `process(message, rawPayload)` looks up the processor by `message.event().eventType()` and falls back to the `"*"` default processor when no specific handler is registered.
+
+The processor owns the publish step — it calls `KafkaProducerService.publish(key, payload, topic)` directly. Throwing any exception routes the message to dead letter:
+- `KafkaPublishException` → `PUBLISH_ERROR`
+- Any other exception → `PROCESSING_ERROR`
+
+### Implemented processors
+
+| Class | Event code | Behaviour |
+|-------|-----------|----------|
+| `DefaultEventProcessor` | `*` (fallback) | Serializes the `KafkaMessage` to JSON and publishes to `kafka.topic.output` |
+
+### Adding a new processor
+
+1. Implement `EventProcessor`, annotate with `@Component`:
+   ```java
+   @Component
+   public class RenewalEventProcessor implements EventProcessor {
+       private final KafkaProducerService publisher;
+       private final String outputTopic;
+
+       public RenewalEventProcessor(
+               KafkaProducerService publisher,
+               @Value("${kafka.topic.output}") String outputTopic) {
+           this.publisher = publisher;
+           this.outputTopic = outputTopic;
+       }
+
+       @Override
+       public String eventCode() { return "RNW"; }
+
+       @Override
+       public void process(KafkaMessage message, String rawPayload) {
+           // custom renewal logic here
+           String key = message.body() != null ? message.body().messageId() : null;
+           publisher.publish(key, rawPayload, outputTopic);
+       }
+   }
+   ```
+
+2. That's it — `MessageProcessorService` picks up the new bean automatically via Spring's `List<EventProcessor>` injection. No other changes required.
+
+> **Note:** `eventCode()` must match the `eventType` string in the incoming message exactly (e.g. `"RNW"`). The `"*"` code is reserved for the default fallback — do not use it in a concrete processor.
+
+---
+
 ## Duplicate Detection
 
 Duplicate detection uses two layers so the consumer thread never touches the database:
@@ -358,10 +410,13 @@ src/main/java/com/example/kafkaprocessor/
 │   ├── KafkaConsumerConfig.java         # consumer + scheduler + active evaluator beans
 │   ├── KafkaConsumerListener.java       # @KafkaListener — main pipeline
 │   ├── KafkaProducerConfig.java         # transactional producer bean
-│   ├── KafkaProducerService.java        # publish wrapper
+│   ├── KafkaProducerService.java        # publish(key, payload, topic) — used by siphon and processors
 │   ├── KafkaPublishException.java
-│   ├── MessageProcessorService.java     # business logic (stub — replace this)
+│   ├── MessageProcessorService.java     # routes by eventType to registered EventProcessor beans
 │   ├── ProcessingException.java
+│   ├── processor/
+│   │   ├── EventProcessor.java          # interface — eventCode() + process(KafkaMessage, rawPayload)
+│   │   └── DefaultEventProcessor.java  # fallback for unrecognised event types (eventCode = "*")
 │   └── siphon/
 │       ├── SiphonEvaluator.java         # interface — eventCode() + evaluate()
 │       └── BdeSiphonEvaluator.java      # routes END+backdated=true to siphon-bde topic
@@ -389,22 +444,32 @@ src/test/java/com/example/kafkaprocessor/
 
 ## Running Locally
 
-Requires Java 21, Docker Desktop, and Gradle on your PATH (or use the absolute path — see `gen-messages.cmd`).
+Requires Java 21 and Docker Desktop. All Gradle commands use `gradlew` (the wrapper) — no local Gradle installation needed.
 
 ### 1. Start the local stack
 
 ```bash
+# First run or after changing KAFKA_CLUSTER_ID — clear stale volumes first:
+docker compose down -v
+
+# Start all services in the background:
 docker compose up -d
+
+# Open Grafana once the stack is up:
+start http://localhost:3000
 ```
 
 This starts four services:
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| Kafka broker | `localhost:9092` | — |
+| Kafka broker (host) | `localhost:9092` | — |
+| Kafka broker (internal) | `kafka:29092` | — (Docker container-to-container only) |
 | Kafka UI | http://localhost:8081 | — |
 | Prometheus | http://localhost:9090 | — |
 | Grafana | http://localhost:3000 | admin / admin |
+
+> **Kafka listener split:** Two advertised listeners are configured — `PLAINTEXT://localhost:9092` for the Spring Boot app running on the host, and `INTERNAL://kafka:29092` for services inside Docker (Kafka UI, etc.). Kafka tells connecting clients to reconnect on the advertised address, so a container given `localhost:9092` would try to connect to itself. Using the Docker service name `kafka:29092` resolves correctly within the Docker network.
 
 **Kafka UI** (`http://localhost:8081`) — browse topics, consumer group lag, and individual messages.
 
@@ -437,6 +502,36 @@ rate(kafka_processor_messages_failed_total[1m])
 kafka_processor_messages_received_total - kafka_processor_messages_published_total - kafka_processor_messages_failed_total
 ```
 
+**CPU & Memory** (auto-collected by Micrometer — no code changes needed):
+
+```promql
+# JVM process CPU usage (0–1, multiply by 100 for %)
+process_cpu_usage * 100
+
+# System-wide CPU usage across all cores (0–1)
+system_cpu_usage * 100
+
+# JVM heap used vs max
+jvm_memory_used_bytes{area="heap"}
+jvm_memory_max_bytes{area="heap"}
+
+# Heap utilization %
+sum(jvm_memory_used_bytes{area="heap"}) / sum(jvm_memory_max_bytes{area="heap"}) * 100
+
+# Non-heap (Metaspace, code cache, etc.)
+jvm_memory_used_bytes{area="nonheap"}
+
+# GC pause P95 latency
+histogram_quantile(0.95, rate(jvm_gc_pause_seconds_bucket[1m]))
+
+# GC pause rate (how often GC is running)
+rate(jvm_gc_pause_seconds_count[1m])
+
+# Live threads
+jvm_threads_live_threads
+jvm_threads_daemon_threads
+```
+
 To build a dashboard: **Dashboards → New → Add visualization**, paste a query, and save.
 
 #### Stopping the stack
@@ -446,53 +541,80 @@ docker compose down        # stop containers, keep volumes
 docker compose down -v     # stop containers AND delete all data
 ```
 
+#### Resetting topics
+
+Use this to clear messages from a topic between test runs without restarting the whole stack.
+
+**Delete a topic** (auto-recreated on next produce/consume since `auto.create.topics.enable=true`):
+```powershell
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic input-topic
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic output-topic
+docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic siphon-bde-topic
+```
+
+**Reset consumer group offset to beginning** (re-read all existing messages without deleting them — app must be stopped first):
+```powershell
+docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh `
+  --bootstrap-server localhost:9092 `
+  --group kafka-processor-group `
+  --topic input-topic `
+  --reset-offsets --to-earliest --execute
+```
+
 ### 2. Build and run all tests
 
 ```bash
-gradle test
+.\gradlew test
 ```
 
 ### 3. Run the application
 
-The active Spring profile controls which metrics backend is used:
+Two independent profile axes control behaviour at startup:
 
-| Profile | Where | How metrics are exported |
-|---------|-------|--------------------------|
-| `prometheus` *(default)* | Home / local | `/actuator/prometheus` scraped by local Docker Prometheus |
-| `datadog` | Work | Pushed to Datadog API every 10s — requires `DD_API_KEY` |
+| Axis | Profile | Effect |
+|------|---------|--------|
+| **Metrics** | `prometheus` *(default)* | `/actuator/prometheus` scraped by local Docker Prometheus |
+| **Metrics** | `datadog` | Pushes metrics to Datadog every 10s — requires `DD_API_KEY` |
+| **Logging** | `local` *(default)* | Human-readable log lines (`HH:mm:ss LEVEL logger interactionId messageId message`) |
+| **Logging** | *(omit `local`)* | Structured JSON via logstash-logback-encoder — for CI / production |
 
-**Local (Prometheus — default):**
-```bash
-gradle bootRun
+**Local dev (readable logs + Prometheus — default):**
+```powershell
+.\gradlew bootRun
 ```
 
-**Work (Datadog):**
+**Local dev with JSON logs (e.g. testing log aggregation):**
+```powershell
+.\gradlew bootRun --args='--spring.profiles.active=prometheus'
+```
+
+**Work (Datadog, JSON logs):**
 ```powershell
 $env:DD_API_KEY = "your-api-key"
 $env:SPRING_PROFILES_ACTIVE = "datadog"
-gradle bootRun
+.\gradlew bootRun
 ```
 Or as a one-liner:
 ```bash
-DD_API_KEY=your-api-key gradle bootRun --args='--spring.profiles.active=datadog'
+DD_API_KEY=your-api-key ./gradlew bootRun --args='--spring.profiles.active=datadog'
 ```
 
 The `kafka.processor.*` counters and timers appear in Datadog automatically under those metric names. The `/actuator/prometheus` endpoint is only available under the `prometheus` profile.
 
 ### 4. Generate test messages
 
-```bash
+```powershell
 # Default: 1000 messages with default distribution
-gradle generateMessages
+.\gradlew generateMessages
 
 # Custom count
-gradle generateMessages -Pcount=200
+.\gradlew generateMessages -Pcount=200
 
 # Custom distribution (must sum to 100)
-gradle generateMessages -Pcount=500 -PpctNC=30 -PpctEND=45 -PpctTRM=5 -PpctRNW=20
+.\gradlew generateMessages -Pcount=500 -PpctNC=30 -PpctEND=45 -PpctTRM=5 -PpctRNW=20
 
 # Custom BDE ratio within END events (default 20%)
-gradle generateMessages -Pcount=100 -PpctBDE=40
+.\gradlew generateMessages -Pcount=100 -PpctBDE=40
 ```
 
 Output is written to `build/generated-messages/messages-<count>.jsonl` — one JSON object per line.
@@ -517,18 +639,13 @@ Requires the `kafka` container to be running. The script copies the JSONL into t
 
 ### 6. Monitor pipeline timings
 
-```powershell
-.\monitor-timings.ps1           # single snapshot
-.\monitor-timings.ps1 -Watch   # refresh every 5 seconds
-```
+Open Grafana at **http://localhost:3000** → Dashboards → **Kafka Processor**.
 
-Reports:
-- **Throughput**: received / published / in-flight / dead letter counts
-- **Latency** (receivedAt → publishedAt): min / avg / P95 / max across all completed messages
-- **Dead letter breakdown** by reason code
-- **In-flight message IDs** (up to 20) — messages received but not yet published
-
-Connects to the REST API at `http://localhost:8080` by default (`-BaseUrl` to override).
+The provisioned dashboard auto-loads and shows:
+- **Throughput**: message rate and in-flight estimate
+- **Latency**: E2E and pipeline P50 / P95 / P99
+- **Dead letters**: rate by reason code
+- **CPU & Memory**: process CPU %, JVM heap, threads, GC pause
 
 ### Full test loop
 
@@ -537,7 +654,7 @@ Connects to the REST API at `http://localhost:8080` by default (`-BaseUrl` to ov
 docker compose up -d
 
 # 2. Start the application (new terminal)
-gradle bootRun
+.\gradlew bootRun
 
 # 3. Generate test messages
 gen-messages.cmd 100
@@ -545,8 +662,8 @@ gen-messages.cmd 100
 # 4. Send them to Kafka
 send-messages.cmd
 
-# 5. Watch the pipeline process them (20s delay before each message is processed)
-.\monitor-timings.ps1 -Watch
+# 5. Watch the pipeline process them in Grafana
+start http://localhost:3000
 ```
 
 While messages are processing, check the UIs:

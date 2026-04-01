@@ -49,8 +49,14 @@ public class KafkaConsumerListener {
     // Cleared in the worker's finally block so redelivered messages can re-enter the pipeline.
     private final Set<String> inFlightIds = ConcurrentHashMap.newKeySet();
 
-    @Value("${app.processing.delay-ms:20000}")
+    @Value("${app.processing.delay-ms:30000}")
     private long processingDelayMs;
+
+    @Value("${app.processing.worker-delay-ms:20000}")
+    private long workerDelayMs;
+
+    @Value("${kafka.topic.output}")
+    private String outputTopic;
 
     public KafkaConsumerListener(ObjectMapper objectMapper,
                                  ControlService controlService,
@@ -100,7 +106,8 @@ public class KafkaConsumerListener {
 
         MdcContext.set(interactionId, messageId);
         try {
-            log.info("Message received");
+            log.info("[RECEIVED] eventType={} topic={} partition={} offset={}",
+                    eventType, record.topic(), record.partition(), record.offset());
 
             // --- Siphon fast-path (before any other processing) ---
             // Each SiphonEvaluator returns a topic name or empty. First match wins.
@@ -111,15 +118,16 @@ public class KafkaConsumerListener {
                     .findFirst()
                     .orElse(Optional.empty());
             if (siphonTopic.isPresent()) {
-                log.info("Siphon triggered, routing to topic={}", siphonTopic.get());
+                log.info("[SIPHON] eventType={} -> topic={}", eventType, siphonTopic.get());
                 try {
-                    kafkaProducerService.siphon(message, siphonTopic.get());
+                    kafkaProducerService.publish(messageId, rawPayload, siphonTopic.get());
                 } catch (Exception e) {
-                    log.error("Siphon publish failed", e);
+                    log.error("[SIPHON-FAIL] eventType={} topic={} -- publish failed", eventType, siphonTopic.get(), e);
                     return; // no ack — redelivery
                 }
                 meterRegistry.counter("kafka.processor.messages.siphoned", "eventType", eventType).increment();
                 acknowledgment.acknowledge();
+                log.info("[SIPHON-ACK] eventType={} topic={}", eventType, siphonTopic.get());
                 return;
             }
 
@@ -145,17 +153,28 @@ public class KafkaConsumerListener {
             Timer.Sample e2eSample = Timer.start(meterRegistry);
             meterRegistry.counter("kafka.processor.messages.received", "eventType", eventType).increment();
 
-            // Schedule the remaining work (process → publish → write PUBLISHED → ack) after the
-            // configured delay. The consumer thread returns immediately, freeing it to pull the
-            // next message. Multiple messages can be in-flight simultaneously, each with their
-            // own independent countdown.
-            processingScheduler.schedule(
-                () -> processDeferred(rawPayload, message, messageId, interactionId, acknowledgment, mdcSnapshot, e2eSample, eventType),
-                processingDelayMs,
-                TimeUnit.MILLISECONDS
-            );
+            // Schedule the remaining work (process → publish → write PUBLISHED → ack) immediately.
+            // The consumer thread returns right away, freeing it to pull the next message.
+            // The configured delay is applied as a scheduler delay so the consumer thread
+            // is not blocked — it returns immediately, and processing begins after the delay.
+            try {
+                processingScheduler.schedule(
+                    () -> processDeferred(rawPayload, message, messageId, interactionId, acknowledgment, mdcSnapshot, e2eSample, eventType),
+                    processingDelayMs,
+                    TimeUnit.MILLISECONDS
+                );
+            } catch (Exception e) {
+                // schedule() failed (e.g. RejectedExecutionException — pool shutting down or at capacity).
+                // Must clean up here: inFlightIds entry would leak forever since processDeferred() will never run.
+                log.error("[SCHEDULE-FAIL] eventType={} -- failed to schedule deferred processing, routing to dead letter", eventType, e);
+                inFlightIds.remove(messageId);
+                e2eSample.stop(meterRegistry.timer("kafka.processor.e2e.latency", "eventType", eventType));
+                meterRegistry.counter("kafka.processor.messages.failed", "reason", "PROCESSING_ERROR").increment();
+                deadLetterService.handle(rawPayload, ReasonCode.PROCESSING_ERROR, messageId, interactionId);
+                return; // no ack — redelivery if pool recovers
+            }
 
-            log.info("Message accepted and scheduled for processing in {}ms", processingDelayMs);
+            log.info("[SCHEDULED] eventType={} delayMs={} inFlight={}", eventType, processingDelayMs, inFlightIds.size());
 
         } finally {
             MdcContext.clear();
@@ -174,15 +193,29 @@ public class KafkaConsumerListener {
         }
         Timer.Sample pipelineSample = Timer.start(meterRegistry);
         try {
+            // --- Apply worker-thread delay ---
+            // Runs on the worker thread concurrently with all other in-flight messages.
+            if (workerDelayMs > 0) {
+                try {
+                    TimeUnit.MILLISECONDS.sleep(workerDelayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    log.warn("[PROCESSING] interrupted during worker delay, routing to dead letter");
+                    deadLetterService.handle(rawPayload, ReasonCode.PROCESSING_ERROR, messageId, interactionId);
+                    return;
+                }
+            }
+
             // --- Write RECEIVED control record ---
             // Done on the worker thread so the DB round-trip (Oracle/SQL Server) does not block
             // the consumer thread. DataIntegrityViolationException here means the app restarted
             // mid-flight — the in-memory set was lost but the ReceivedRecord row survived.
             // Treat as a restart/replay duplicate: route to dead letter and ack.
+            log.info("[PROCESSING] eventType={}", eventType);
             try {
                 controlService.recordReceived(messageId, interactionId);
             } catch (DataIntegrityViolationException e) {
-                log.warn("ReceivedRecord already exists (restart/replay duplicate), routing to dead letter");
+                log.warn("[DUPLICATE] eventType={} -- restart/replay duplicate detected, routing to dead letter", eventType);
                 meterRegistry.counter("kafka.processor.messages.failed", "reason", "DUPLICATE").increment();
                 deadLetterService.handle(rawPayload, ReasonCode.DUPLICATE, messageId, interactionId);
                 acknowledgment.acknowledge();
@@ -194,24 +227,22 @@ public class KafkaConsumerListener {
                 return; // no ack
             }
 
-            // --- Process ---
-            KafkaMessage processed;
+            // --- Process and Publish (delegated to EventProcessor via MessageProcessorService) ---
+            // The EventProcessor implementation is responsible for both transforming the message
+            // and calling KafkaProducerService.publish() with the result JSON and target topic.
+            // KafkaPublishException from within the processor maps to PUBLISH_ERROR;
+            // any other exception from business logic maps to PROCESSING_ERROR.
             try {
-                processed = messageProcessorService.process(message);
+                messageProcessorService.process(message);
+            } catch (KafkaPublishException e) {
+                log.error("Publish failed", e);
+                meterRegistry.counter("kafka.processor.messages.failed", "reason", "PUBLISH_ERROR").increment();
+                deadLetterService.handle(rawPayload, ReasonCode.PUBLISH_ERROR, messageId, interactionId);
+                return; // no ack
             } catch (Exception e) {
                 log.error("Processing failed", e);
                 meterRegistry.counter("kafka.processor.messages.failed", "reason", "PROCESSING_ERROR").increment();
                 deadLetterService.handle(rawPayload, ReasonCode.PROCESSING_ERROR, messageId, interactionId);
-                return; // no ack
-            }
-
-            // --- Publish ---
-            try {
-                kafkaProducerService.publish(processed);
-            } catch (Exception e) {
-                log.error("Publish failed", e);
-                meterRegistry.counter("kafka.processor.messages.failed", "reason", "PUBLISH_ERROR").increment();
-                deadLetterService.handle(rawPayload, ReasonCode.PUBLISH_ERROR, messageId, interactionId);
                 return; // no ack
             }
 
@@ -228,6 +259,7 @@ public class KafkaConsumerListener {
             // --- Acknowledge only on full success ---
             meterRegistry.counter("kafka.processor.messages.published", "eventType", eventType).increment();
             acknowledgment.acknowledge();
+            log.info("[PUBLISHED] eventType={} -> topic={}", eventType, outputTopic);
 
         } finally {
             // Record instrumentation — timers always stop here regardless of outcome.
@@ -239,7 +271,7 @@ public class KafkaConsumerListener {
             if (messageId != null) {
                 inFlightIds.remove(messageId);
             }
-            MdcContext.clear();
+            MDC.clear(); // Full clear: pool threads are reused; selective clear risks leaking keys added elsewhere.
         }
     }
 

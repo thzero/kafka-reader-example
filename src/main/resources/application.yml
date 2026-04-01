@@ -1,4 +1,15 @@
 spring:
+  profiles:
+    # Active profiles control metrics registry and log format:
+    #   prometheus (default) — exposes /actuator/prometheus for local Prometheus/Grafana
+    #   datadog             — pushes metrics to Datadog (requires DD_API_KEY env var)
+    #   local    (default)  — human-readable log output; omit for JSON logs (CI/prod)
+    #
+    # Override at startup:
+    #   .\gradlew bootRun --args='--spring.profiles.active=prometheus'   (JSON logs, local metrics)
+    #   .\gradlew bootRun --args='--spring.profiles.active=datadog'      (JSON logs, Datadog metrics)
+    #   SPRING_PROFILES_ACTIVE=datadog java -jar app.jar
+    default: prometheus,local
   datasource:
     url: jdbc:h2:mem:controldb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
     driver-class-name: org.h2.Driver
@@ -37,8 +48,9 @@ kafka:
 
   producer:
     # Transactional ID prefix for exactly-once semantics (EOS).
-    # Must be unique per instance — append an instance ID in multi-instance deployments.
-    transactional-id-prefix: kafkaprocessor-tx
+    # A random UUID suffix is appended at startup to guarantee uniqueness across instances.
+    # Each restart gets a fresh ID — orphaned transactions from a previous run time out naturally.
+    transactional-id-prefix: kafkaprocessor-tx-${random.uuid}
 
 # -----------------------------------------------------------------------
 # Application-specific settings — not part of Kafka or Spring internals.
@@ -46,34 +58,27 @@ kafka:
 # -----------------------------------------------------------------------
 app:
   processing:
-    # How long (ms) the processor waits before executing business logic on each message.
-    # This is a deliberate delay to account for upstream race conditions.
-    # It is NOT a Kafka setting — the consumer thread returns immediately after scheduling;
-    # the delay is handled by a ScheduledExecutorService so many messages wait in parallel.
-    # Set to 0 to disable the delay. Default: 20000 (20 seconds).
-    delay-ms: 20000
-    # Number of worker threads in the scheduled processing pool per instance.
-    # Each in-flight message (waiting out its delay) occupies one thread.
-    # Size to: expected message rate (msg/sec) * delay-ms / 1000
-    # Example: 12 msg/sec * 20s = 240 in-flight messages -> set worker-threads >= 240.
-    worker-threads: 240
+    # Scheduler delay (ms): how long the ScheduledExecutorService waits before handing the
+    # task to a worker thread. Consumer thread returns immediately after scheduling.
+    # Use this to throttle how quickly new messages enter the worker pool.
+    # Set to 0 to disable. Default: 30000 (30 seconds).
+    delay-ms: 30000
+    # Worker delay (ms): Thread.sleep inside the worker thread before executing business logic.
+    # Runs concurrently across all in-flight messages on their own worker threads.
+    # Use this to enforce a minimum processing wait (e.g. upstream race condition buffer).
+    # Set to 0 to disable. Default: 20000 (20 seconds).
+    worker-delay-ms: 20000
+    # Core pool size for the ScheduledThreadPoolExecutor (backed by virtual threads).
+    # Virtual threads are cheap: Thread.sleep and I/O unmount the carrier thread rather than
+    # blocking it, so the old msg/sec * delay sizing formula no longer applies.
+    # This value controls how many threads are kept ready to fire scheduled tasks on time.
+    # A small value (e.g. 8-16 * CPU cores) is sufficient for most workloads.
+    worker-threads: 32
   siphon:
     # Event codes of SiphonEvaluator implementations to activate.
     # Matches SiphonEvaluator.eventCode() on each implementation.
     # Empty list = all registered evaluators are active.
     enabled: [bde]
-
-# Active profile controls which metrics registry is used:
-#   prometheus (default) — exposes /actuator/prometheus for local Prometheus/Grafana
-#   datadog             — pushes metrics to Datadog (requires DD_API_KEY env var)
-#
-# Override at startup:
-#   gradle bootRun --args='--spring.profiles.active=datadog'
-#   java -jar app.jar --spring.profiles.active=datadog
-#   SPRING_PROFILES_ACTIVE=datadog java -jar app.jar
-spring:
-  profiles:
-    default: prometheus
 
 management:
   endpoints:
@@ -91,9 +96,11 @@ management:
       percentiles-histogram:
         kafka.processor.e2e.latency: true
         kafka.processor.pipeline.latency: true
+        jvm.gc.pause: true
       percentiles:
         kafka.processor.e2e.latency: 0.5,0.95,0.99
         kafka.processor.pipeline.latency: 0.5,0.95,0.99
+        jvm.gc.pause: 0.5,0.95,0.99
 
 server:
   port: 8080

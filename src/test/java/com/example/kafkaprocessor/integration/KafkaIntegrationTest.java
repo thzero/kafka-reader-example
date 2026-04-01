@@ -22,10 +22,12 @@ import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.ContainerTestUtils;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
+import org.springframework.lang.NonNull;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -54,12 +56,15 @@ class KafkaIntegrationTest {
     private ObjectMapper objectMapper;
 
     @Value("${kafka.topic.input}")
+    @NonNull
     private String inputTopic;
 
     @Value("${kafka.topic.output}")
+    @NonNull
     private String outputTopic;
 
     @Value("${kafka.topic.siphon-bde}")
+    @NonNull
     private String siphonBdeTopic;
 
     @Test
@@ -84,9 +89,9 @@ class KafkaIntegrationTest {
         KafkaMessage inputMessage = new KafkaMessage(
                 new EventHeader("iid-integration", "TEST", null),
                 new MessageBody("a0000000-0000-0000-0000-000000000001"));
-        String payload = objectMapper.writeValueAsString(inputMessage);
+        String payload = Objects.requireNonNull(objectMapper.writeValueAsString(inputMessage));
 
-        Map<String, Object> producerProps = KafkaTestUtils.producerProps(embeddedKafkaBroker);
+        Map<String, Object> producerProps = Objects.requireNonNull(KafkaTestUtils.producerProps(embeddedKafkaBroker));
         org.springframework.kafka.core.DefaultKafkaProducerFactory<String, String> pf =
                 new org.springframework.kafka.core.DefaultKafkaProducerFactory<>(producerProps);
         org.springframework.kafka.core.KafkaTemplate<String, String> template =
@@ -130,9 +135,9 @@ class KafkaIntegrationTest {
         KafkaMessage bdeMessage = new KafkaMessage(
                 new EventHeader("iid-bde-integration", "END", true),
                 new MessageBody("b0000000-0000-0000-0000-000000000001"));
-        String payload = objectMapper.writeValueAsString(bdeMessage);
+        String payload = Objects.requireNonNull(objectMapper.writeValueAsString(bdeMessage));
 
-        Map<String, Object> producerProps = KafkaTestUtils.producerProps(embeddedKafkaBroker);
+        Map<String, Object> producerProps = Objects.requireNonNull(KafkaTestUtils.producerProps(embeddedKafkaBroker));
         org.springframework.kafka.core.DefaultKafkaProducerFactory<String, String> pf =
                 new org.springframework.kafka.core.DefaultKafkaProducerFactory<>(producerProps);
         org.springframework.kafka.core.KafkaTemplate<String, String> template =

@@ -1,6 +1,5 @@
 package com.example.kafkaprocessor.kafka;
 
-import com.example.kafkaprocessor.model.KafkaMessage;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
@@ -10,6 +9,9 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.support.serializer.JsonSerializer;
+import org.springframework.lang.NonNull;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -18,13 +20,34 @@ import java.util.Map;
 public class KafkaProducerConfig {
 
     @Value("${kafka.bootstrap-servers}")
+    @NonNull
     private String bootstrapServers;
 
     @Value("${kafka.producer.transactional-id-prefix}")
+    @NonNull
     private String transactionalIdPrefix;
 
     @Bean
-    public ProducerFactory<String, KafkaMessage> producerFactory() {
+    public ProducerFactory<String, String> producerFactory() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+
+        DefaultKafkaProducerFactory<String, String> factory =
+                new DefaultKafkaProducerFactory<>(props);
+        factory.setTransactionIdPrefix(transactionalIdPrefix);
+        return factory;
+    }
+
+    @Bean
+    public KafkaTemplate<String, String> kafkaTemplate(@NonNull ProducerFactory<String, String> producerFactory) {
+        return new KafkaTemplate<>(producerFactory);
+    }
+
+    @Bean
+    public ProducerFactory<String, JsonNode> jsonProducerFactory() {
         Map<String, Object> props = new HashMap<>();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -32,14 +55,14 @@ public class KafkaProducerConfig {
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         props.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
 
-        DefaultKafkaProducerFactory<String, KafkaMessage> factory =
+        DefaultKafkaProducerFactory<String, JsonNode> factory =
                 new DefaultKafkaProducerFactory<>(props);
-        factory.setTransactionIdPrefix(transactionalIdPrefix);
+        factory.setTransactionIdPrefix(transactionalIdPrefix + "-json");
         return factory;
     }
 
     @Bean
-    public KafkaTemplate<String, KafkaMessage> kafkaTemplate() {
-        return new KafkaTemplate<>(producerFactory());
+    public KafkaTemplate<String, JsonNode> jsonKafkaTemplate(@NonNull ProducerFactory<String, JsonNode> jsonProducerFactory) {
+        return new KafkaTemplate<>(jsonProducerFactory);
     }
 }

@@ -12,6 +12,7 @@ import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.lang.NonNull;
 
 import java.util.HashMap;
 import java.util.List;
@@ -41,29 +42,34 @@ public class KafkaConsumerConfig {
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         return new DefaultKafkaConsumerFactory<>(props);
     }
 
     @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
+    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory(
+            @NonNull ConsumerFactory<String, String> consumerFactory) {
         ConcurrentKafkaListenerContainerFactory<String, String> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(consumerFactory());
+        factory.setConsumerFactory(consumerFactory);
         factory.setConcurrency(concurrency);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         return factory;
     }
 
-    // Scheduled thread pool used to defer message processing by the configured delay.
-    // The consumer thread schedules work here and returns immediately, allowing the
-    // consumer to keep pulling messages while prior messages wait out their delay.
-    // Size this to: expected in-flight messages during the delay window.
-    // Example: 100 msg/sec * 20s delay = 2000 in-flight → set worker-threads >= 2000.
-    @Bean
+    // Scheduled thread pool backed by virtual threads (Java 21).
+    // Virtual threads are cheap — Thread.sleep and I/O (DB, Kafka) unmount the carrier thread
+    // rather than blocking it, so thousands of in-flight messages have negligible overhead.
+    // worker-threads is still used as the ScheduledThreadPoolExecutor core pool size (i.e. the
+    // number of threads kept alive to fire scheduled tasks on time); it no longer needs to
+    // be sized to the full in-flight message count.
+    @Bean(destroyMethod = "shutdown")
     public ScheduledExecutorService processingScheduler() {
-        return Executors.newScheduledThreadPool(workerThreads);
+        return Executors.newScheduledThreadPool(
+                workerThreads,
+                Thread.ofVirtual().name("kafka-worker-", 0).factory());
     }
 
     /**
