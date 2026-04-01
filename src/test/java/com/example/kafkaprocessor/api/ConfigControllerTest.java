@@ -33,8 +33,8 @@ class ConfigControllerTest {
     @Test
     void getConfig_returnsAllCurrentSettings() throws Exception {
         AppProperties.Processing processing = new AppProperties.Processing();
-        processing.setDelayMs(20000);
-        processing.setWorkerThreads(240);
+        processing.setProcessorDelayMs(20000);
+        processing.setWorkerThreads(200);
         AppProperties.Siphon siphon = new AppProperties.Siphon();
         siphon.setEnabled(List.of("bde"));
         when(appProperties.getProcessing()).thenReturn(processing);
@@ -47,8 +47,8 @@ class ConfigControllerTest {
                 .andExpect(jsonPath("$.kafka.consumerConcurrency").value(1))
                 .andExpect(jsonPath("$.kafka.inputTopic").value("input-topic"))
                 .andExpect(jsonPath("$.kafka.outputTopic").value("output-topic"))
-                .andExpect(jsonPath("$.app.processingDelayMs").value(20000))
-                .andExpect(jsonPath("$.app.processingWorkerThreads").value(240))
+                .andExpect(jsonPath("$.app.processorDelayMs").value(20000))
+                .andExpect(jsonPath("$.app.workerThreads").value(200))
                 .andExpect(jsonPath("$.app.siphonEnabledEvaluators[0]").value("bde"));
     }
 }
