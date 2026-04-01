@@ -55,7 +55,8 @@ class KafkaConsumerListenerTest {
                 messageProcessorService, kafkaProducerService, deadLetterService, scheduler,
                 List.of(siphonEvaluator), new SimpleMeterRegistry());
         // Zero delay so deferred work fires immediately, keeping tests fast and deterministic
-        ReflectionTestUtils.setField(listener, "processingDelayMs", 0L);
+        ReflectionTestUtils.setField(listener, "processorDelayMs", 0L);
+        ReflectionTestUtils.setField(listener, "processorLoadDelayMs", 0L);
     }
 
     private ConsumerRecord<String, String> record(String payload) {
@@ -149,7 +150,8 @@ class KafkaConsumerListenerTest {
                 objectMapper, controlService, messageProcessorService,
                 kafkaProducerService, deadLetterService, nonExecutingScheduler,
                 List.of(siphonEvaluator), new SimpleMeterRegistry());
-        ReflectionTestUtils.setField(l, "processingDelayMs", 0L);
+        ReflectionTestUtils.setField(l, "processorDelayMs", 0L);
+        ReflectionTestUtils.setField(l, "processorLoadDelayMs", 0L);
 
         Acknowledgment ack2 = mock(Acknowledgment.class);
 
