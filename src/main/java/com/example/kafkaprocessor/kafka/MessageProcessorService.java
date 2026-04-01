@@ -2,6 +2,7 @@ package com.example.kafkaprocessor.kafka;
 
 import com.example.kafkaprocessor.kafka.processor.EventProcessor;
 import com.example.kafkaprocessor.model.KafkaMessage;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -61,4 +62,3 @@ public class MessageProcessorService {
         processor.process(message);
     }
 }
-

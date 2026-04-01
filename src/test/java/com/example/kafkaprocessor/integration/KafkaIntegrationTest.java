@@ -1,11 +1,14 @@
 package com.example.kafkaprocessor.integration;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.example.kafkaprocessor.KafkaProcessorApplication;
-import com.example.kafkaprocessor.control.ReceivedRecordRepository;
 import com.example.kafkaprocessor.control.PublishedRecordRepository;
+import com.example.kafkaprocessor.control.ReceivedRecordRepository;
 import com.example.kafkaprocessor.model.EventHeader;
 import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.model.MessageBody;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -30,8 +33,6 @@ import java.util.Objects;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(classes = KafkaProcessorApplication.class)
 @ActiveProfiles("integration")

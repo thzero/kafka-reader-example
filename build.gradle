@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '3.4.1'
     id 'io.spring.dependency-management' version '1.1.7'
+    id 'com.diffplug.spotless' version '6.25.0'
 }
 
 group = 'com.example'
@@ -34,6 +35,24 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+// ---------------------------------------------------------------------------
+// Spotless — import ordering, unused import removal, trailing whitespace.
+// Run `./gradlew spotlessApply` to auto-fix, `./gradlew spotlessCheck` to gate.
+//
+// Import groups (blank line between each):
+//   1. com.example.*          — project-internal
+//   2. (everything else)      — third-party (com.fasterxml, io, jakarta, org)
+//   3. java.*, javax.*        — JDK standard library
+// ---------------------------------------------------------------------------
+spotless {
+    java {
+        importOrder('com.example', '', 'java', 'javax')
+        removeUnusedImports()
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
 }
 
 // ---------------------------------------------------------------------------

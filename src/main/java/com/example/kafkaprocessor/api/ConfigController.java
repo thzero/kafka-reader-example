@@ -1,6 +1,7 @@
 package com.example.kafkaprocessor.api;
 
 import com.example.kafkaprocessor.config.AppProperties;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -15,22 +16,6 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/config")
 public class ConfigController {
-
-    record ConfigView(KafkaView kafka, AppView app) {}
-
-    record KafkaView(
-            String bootstrapServers,
-            String consumerGroupId,
-            int consumerConcurrency,
-            String inputTopic,
-            String outputTopic) {}
-
-    record AppView(
-            long processorDelayMs,
-            long processorLoadDelayMs,
-            long processorTimeoutMs,
-            int workerThreads,
-            List<String> siphonEnabledEvaluators) {}
 
     private final AppProperties appProperties;
     private final String bootstrapServers;
@@ -62,4 +47,24 @@ public class ConfigController {
                 new KafkaView(bootstrapServers, consumerGroupId, consumerConcurrency, inputTopic, outputTopic),
                 new AppView(p.getProcessorDelayMs(), p.getProcessorLoadDelayMs(), p.getProcessorTimeoutMs(), p.getWorkerThreads(), s.getEnabled()));
     }
+
+    // -------------------------------------------------------------------------
+    // Nested types
+    // -------------------------------------------------------------------------
+
+    record ConfigView(KafkaView kafka, AppView app) {}
+
+    record KafkaView(
+            String bootstrapServers,
+            String consumerGroupId,
+            int consumerConcurrency,
+            String inputTopic,
+            String outputTopic) {}
+
+    record AppView(
+            long processorDelayMs,
+            long processorLoadDelayMs,
+            long processorTimeoutMs,
+            int workerThreads,
+            List<String> siphonEnabledEvaluators) {}
 }

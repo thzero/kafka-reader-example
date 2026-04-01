@@ -1,9 +1,13 @@
 package com.example.kafkaprocessor.kafka.processor;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.verify;
+
 import com.example.kafkaprocessor.kafka.KafkaProducerService;
 import com.example.kafkaprocessor.model.EventHeader;
 import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.model.MessageBody;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,9 +18,6 @@ import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
 class DefaultEventProcessorTest {

@@ -2,6 +2,7 @@ package com.example.kafkaprocessor.kafka;
 
 import com.example.kafkaprocessor.config.AppProperties;
 import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
+
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.beans.factory.ObjectProvider;

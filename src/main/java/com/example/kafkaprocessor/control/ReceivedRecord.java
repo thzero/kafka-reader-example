@@ -1,6 +1,7 @@
 package com.example.kafkaprocessor.control;
 
 import jakarta.persistence.*;
+
 import java.time.Instant;
 
 // Unique constraint on messageId enforces exactly-once processing at the database level.

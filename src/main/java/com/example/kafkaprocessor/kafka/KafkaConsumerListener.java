@@ -3,18 +3,17 @@ package com.example.kafkaprocessor.kafka;
 import com.example.kafkaprocessor.control.ControlService;
 import com.example.kafkaprocessor.deadletter.DeadLetterService;
 import com.example.kafkaprocessor.deadletter.ReasonCode;
+import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
 import com.example.kafkaprocessor.logging.MdcContext;
 import com.example.kafkaprocessor.model.KafkaMessage;
-import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import java.util.List;
-import java.util.Optional;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,22 +25,18 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import jakarta.annotation.PostConstruct;
 
 @Component
 public class KafkaConsumerListener {
 
     private static final Logger log = LoggerFactory.getLogger(KafkaConsumerListener.class);
-
-    // Bundles per-message data so it can be passed as a unit rather than as individual parameters.
-    private record MessageContext(
-            String rawPayload, KafkaMessage message,
-            String messageId, String interactionId, String eventType) {}
 
     private final ObjectMapper objectMapper;
     private final ControlService controlService;
@@ -102,15 +97,6 @@ public class KafkaConsumerListener {
                 .register(meterRegistry);
         if (statusLogIntervalMs > 0) {
             processingScheduler.scheduleAtFixedRate(this::logStatus, statusLogIntervalMs, statusLogIntervalMs, TimeUnit.MILLISECONDS);
-        }
-    }
-
-    private void logStatus() {
-        int inFlight = inFlightIds.size();
-        if (inFlight > 0) {
-            log.info("[STATUS] inFlight={}", inFlight);
-        } else {
-            log.debug("[STATUS] idle — inFlight=0");
         }
     }
 
@@ -295,6 +281,15 @@ public class KafkaConsumerListener {
         }
     }
 
+    private void logStatus() {
+        int inFlight = inFlightIds.size();
+        if (inFlight > 0) {
+            log.info("[STATUS] inFlight={}", inFlight);
+        } else {
+            log.debug("[STATUS] idle — inFlight=0");
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Meter cache helpers — avoid per-call String[] allocation + registry lookup
     // -------------------------------------------------------------------------
@@ -316,4 +311,13 @@ public class KafkaConsumerListener {
             return false;
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Nested types
+    // -------------------------------------------------------------------------
+
+    // Bundles per-message data so it can be passed as a unit rather than as individual parameters.
+    private record MessageContext(
+            String rawPayload, KafkaMessage message,
+            String messageId, String interactionId, String eventType) {}
 }

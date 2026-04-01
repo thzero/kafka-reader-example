@@ -1,6 +1,7 @@
 package com.example.kafkaprocessor.control;
 
 import jakarta.persistence.*;
+
 import java.time.Instant;
 
 @Entity
