@@ -146,11 +146,12 @@ public class KafkaConsumerListener {
             // --- Siphon fast-path (before any other processing) ---
             // Each SiphonEvaluator returns a topic name or empty. First match wins.
             // To add a route: implement SiphonEvaluator, register as @Component, add code to app.siphon.enabled.
-            Optional<String> siphonTopic = siphonEvaluators.stream()
-                    .map(e -> e.evaluate(message))
-                    .filter(Optional::isPresent)
-                    .findFirst()
-                    .orElse(Optional.empty());
+            Optional<String> siphonTopic = siphonEvaluators.isEmpty() ? Optional.empty() :
+                    siphonEvaluators.stream()
+                            .map(e -> e.evaluate(message))
+                            .filter(Optional::isPresent)
+                            .map(Optional::get)
+                            .findFirst();
             if (siphonTopic.isPresent()) {
                 log.info("[SIPHON] eventType={} -> topic={}", eventType, siphonTopic.get());
                 try {
@@ -159,7 +160,7 @@ public class KafkaConsumerListener {
                     log.error("[SIPHON-FAIL] eventType={} topic={} -- publish failed", eventType, siphonTopic.get(), e);
                     return; // no ack — redelivery
                 }
-                meterRegistry.counter("kafka.processor.messages.siphoned", "eventType", eventType).increment();
+                siphonedCounters.computeIfAbsent(eventType, et -> meterRegistry.counter("kafka.processor.messages.siphoned", "eventType", et)).increment();
                 acknowledgment.acknowledge();
                 log.info("[SIPHON-ACK] eventType={} topic={}", eventType, siphonTopic.get());
                 return;
@@ -185,7 +186,7 @@ public class KafkaConsumerListener {
             // Start e2e timer here — after all fast-path exits — so it captures the full
             // pipeline time: scheduled delay + worker execution. Stopped in processDeferred.
             Timer.Sample e2eSample = Timer.start(meterRegistry);
-            meterRegistry.counter("kafka.processor.messages.received", "eventType", eventType).increment();
+            receivedCounters.computeIfAbsent(eventType, et -> meterRegistry.counter("kafka.processor.messages.received", "eventType", et)).increment();
 
             // Schedule work after processor-delay-ms. The task sits in the delay queue —
             // NO thread is consumed while waiting. A pool of 200 platform threads handles
@@ -280,14 +281,14 @@ public class KafkaConsumerListener {
             }
 
             // --- Acknowledge only on full success ---
-            meterRegistry.counter("kafka.processor.messages.published", "eventType", eventType).increment();
+            publishedCounters.computeIfAbsent(eventType, et -> meterRegistry.counter("kafka.processor.messages.published", "eventType", et)).increment();
             acknowledgment.acknowledge();
             log.info("[PUBLISHED] eventType={} -> topic={}", eventType, outputTopic);
 
         } finally {
             // Record instrumentation — timers always stop here regardless of outcome.
-            pipelineSample.stop(meterRegistry.timer("kafka.processor.pipeline.latency", "eventType", eventType));
-            e2eSample.stop(meterRegistry.timer("kafka.processor.e2e.latency", "eventType", eventType));
+            pipelineSample.stop(pipelineTimers.computeIfAbsent(eventType, et -> meterRegistry.timer("kafka.processor.pipeline.latency", "eventType", et)));
+            e2eSample.stop(e2eTimers.computeIfAbsent(eventType, et -> meterRegistry.timer("kafka.processor.e2e.latency", "eventType", et)));
             // Always release the in-flight slot:
             // - On success: clears the slot after ack so an explicit replay can re-enter.
             // - On failure (no-ack): frees the slot so the redelivered message can re-enter.
