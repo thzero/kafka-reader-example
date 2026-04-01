@@ -31,6 +31,15 @@ public class AppProperties {
         /** Milliseconds the worker thread sleeps before executing business logic (Thread.sleep). 0 disables. */
         private long workerDelayMs = 20000;
 
+        /** When true, pauses the Kafka consumer after scheduling until all in-flight workers complete. */
+        private boolean drainBeforePoll = true;
+
+        /** Timeout (ms) for the processor step (business logic + publish). Exceeded → dead letter. 0 disables. */
+        private long processorTimeoutMs = 10000;
+
+        /** How often (ms) the pipeline status is logged (inFlight count, pause state). 0 disables. */
+        private long statusLogIntervalMs = 10000;
+
         /** ScheduledThreadPoolExecutor core pool size (virtual threads). Small value sufficient — virtual threads handle I/O waits without blocking carrier threads. */
         private int workerThreads = 32;
 
@@ -39,6 +48,15 @@ public class AppProperties {
 
         public long getWorkerDelayMs() { return workerDelayMs; }
         public void setWorkerDelayMs(long workerDelayMs) { this.workerDelayMs = workerDelayMs; }
+
+        public boolean isDrainBeforePoll() { return drainBeforePoll; }
+        public void setDrainBeforePoll(boolean drainBeforePoll) { this.drainBeforePoll = drainBeforePoll; }
+
+        public long getProcessorTimeoutMs() { return processorTimeoutMs; }
+        public void setProcessorTimeoutMs(long processorTimeoutMs) { this.processorTimeoutMs = processorTimeoutMs; }
+
+        public long getStatusLogIntervalMs() { return statusLogIntervalMs; }
+        public void setStatusLogIntervalMs(long statusLogIntervalMs) { this.statusLogIntervalMs = statusLogIntervalMs; }
 
         public int getWorkerThreads() { return workerThreads; }
         public void setWorkerThreads(int workerThreads) { this.workerThreads = workerThreads; }

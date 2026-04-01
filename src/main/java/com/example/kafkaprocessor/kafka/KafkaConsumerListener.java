@@ -7,6 +7,7 @@ import com.example.kafkaprocessor.logging.MdcContext;
 import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
 
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.util.List;
@@ -29,6 +30,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import jakarta.annotation.PostConstruct;
 
 @Component
 public class KafkaConsumerListener {
@@ -49,11 +51,13 @@ public class KafkaConsumerListener {
     // Cleared in the worker's finally block so redelivered messages can re-enter the pipeline.
     private final Set<String> inFlightIds = ConcurrentHashMap.newKeySet();
 
-    @Value("${app.processing.delay-ms:30000}")
-    private long processingDelayMs;
+    @Value("${app.processing.processor-delay-ms:20000}")
+    private long processorDelayMs;
+    @Value("${app.processor-load-delay-ms:3500}")
+    private long processorLoadDelayMs;
 
-    @Value("${app.processing.worker-delay-ms:20000}")
-    private long workerDelayMs;
+    @Value("${app.processing.status-log-interval-ms:10000}")
+    private long statusLogIntervalMs;
 
     @Value("${kafka.topic.output}")
     private String outputTopic;
@@ -63,7 +67,7 @@ public class KafkaConsumerListener {
                                  MessageProcessorService messageProcessorService,
                                  KafkaProducerService kafkaProducerService,
                                  DeadLetterService deadLetterService,
-                                 ScheduledExecutorService processingScheduler,
+                                 @Qualifier("processingScheduler") ScheduledExecutorService processingScheduler,
                                  @Qualifier("activeSiphonEvaluators") List<SiphonEvaluator> siphonEvaluators,
                                  MeterRegistry meterRegistry) {
         this.objectMapper = objectMapper;
@@ -74,6 +78,26 @@ public class KafkaConsumerListener {
         this.processingScheduler = processingScheduler;
         this.siphonEvaluators = siphonEvaluators;
         this.meterRegistry = meterRegistry;
+    }
+
+    @PostConstruct
+    private void startStatusLogger() {
+        Gauge.builder("kafka.processor.messages.in.flight", inFlightIds, Set::size)
+                .description("Number of messages currently in-flight (scheduled + executing)")
+                .register(meterRegistry);
+        if (statusLogIntervalMs > 0) {
+            processingScheduler.scheduleAtFixedRate(this::logStatus, statusLogIntervalMs, statusLogIntervalMs, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    /** Periodically logs pipeline status: in-flight count. */
+    private void logStatus() {
+        int inFlight = inFlightIds.size();
+        if (inFlight > 0) {
+            log.info("[STATUS] inFlight={}", inFlight);
+        } else {
+            log.debug("[STATUS] idle — inFlight=0");
+        }
     }
 
     @KafkaListener(topics = "${kafka.topic.input}", containerFactory = "kafkaListenerContainerFactory")
@@ -153,15 +177,13 @@ public class KafkaConsumerListener {
             Timer.Sample e2eSample = Timer.start(meterRegistry);
             meterRegistry.counter("kafka.processor.messages.received", "eventType", eventType).increment();
 
-            // Schedule the remaining work (process → publish → write PUBLISHED → ack) immediately.
-            // The consumer thread returns right away, freeing it to pull the next message.
-            // The configured delay is applied as a scheduler delay so the consumer thread
-            // is not blocked — it returns immediately, and processing begins after the delay.
+            // Schedule work after processor-delay-ms. The task sits in the delay queue —
+            // NO thread is consumed while waiting. A pool of 200 platform threads handles
+            // tens of thousands of concurrently-delayed tasks with zero overhead.
             try {
                 processingScheduler.schedule(
                     () -> processDeferred(rawPayload, message, messageId, interactionId, acknowledgment, mdcSnapshot, e2eSample, eventType),
-                    processingDelayMs,
-                    TimeUnit.MILLISECONDS
+                    processorDelayMs + processorLoadDelayMs, TimeUnit.MILLISECONDS
                 );
             } catch (Exception e) {
                 // schedule() failed (e.g. RejectedExecutionException — pool shutting down or at capacity).
@@ -174,8 +196,11 @@ public class KafkaConsumerListener {
                 return; // no ack — redelivery if pool recovers
             }
 
-            log.info("[SCHEDULED] eventType={} delayMs={} inFlight={}", eventType, processingDelayMs, inFlightIds.size());
-
+            log.info("[SCHEDULED] eventType={} inFlight={}", eventType, inFlightIds.size());
+        }
+        catch (Exception e) {
+                deadLetterService.handle(rawPayload, ReasonCode.LISTENING_ERROR, messageId, interactionId);
+                return; // no ack — redelivery if pool recovers
         } finally {
             MdcContext.clear();
         }
@@ -193,19 +218,6 @@ public class KafkaConsumerListener {
         }
         Timer.Sample pipelineSample = Timer.start(meterRegistry);
         try {
-            // --- Apply worker-thread delay ---
-            // Runs on the worker thread concurrently with all other in-flight messages.
-            if (workerDelayMs > 0) {
-                try {
-                    TimeUnit.MILLISECONDS.sleep(workerDelayMs);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    log.warn("[PROCESSING] interrupted during worker delay, routing to dead letter");
-                    deadLetterService.handle(rawPayload, ReasonCode.PROCESSING_ERROR, messageId, interactionId);
-                    return;
-                }
-            }
-
             // --- Write RECEIVED control record ---
             // Done on the worker thread so the DB round-trip (Oracle/SQL Server) does not block
             // the consumer thread. DataIntegrityViolationException here means the app restarted
@@ -228,10 +240,11 @@ public class KafkaConsumerListener {
             }
 
             // --- Process and Publish (delegated to EventProcessor via MessageProcessorService) ---
-            // The EventProcessor implementation is responsible for both transforming the message
-            // and calling KafkaProducerService.publish() with the result JSON and target topic.
-            // KafkaPublishException from within the processor maps to PUBLISH_ERROR;
-            // any other exception from business logic maps to PROCESSING_ERROR.
+            // Runs directly on the platform worker thread — no virtual thread wrapping.
+            // Virtual threads pin to carrier threads when they hit Kafka's internal synchronized
+            // blocks, which exhausts the ForkJoinPool and causes exactly the throughput collapse
+            // we are trying to avoid. Platform threads block cleanly.
+            // Timeout is enforced by delivery.timeout.ms on the Kafka producer.
             try {
                 messageProcessorService.process(message);
             } catch (KafkaPublishException e) {

@@ -13,6 +13,109 @@
     {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 104,
+      "title": "Message Totals",
+      "type": "row"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+      "id": 11,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "sum(kafka_processor_messages_received_total) or vector(0)", "legendFormat": "Received", "refId": "A" }
+      ],
+      "title": "Received",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "green" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
+      "id": 12,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "sum(kafka_processor_messages_published_total) or vector(0)", "legendFormat": "Published", "refId": "A" }
+      ],
+      "title": "Published",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 10, "y": 1 },
+      "id": 13,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "sum(kafka_processor_messages_siphoned_total) or vector(0)", "legendFormat": "Siphoned", "refId": "A" }
+      ],
+      "title": "Siphoned",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "red", "value": 1 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 14, "y": 1 },
+      "id": 14,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "sum(kafka_processor_messages_failed_total) or vector(0)", "legendFormat": "Failed", "refId": "A" }
+      ],
+      "title": "Failed (Dead Letter)",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 100 },
+            { "color": "red", "value": 500 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "id": 15,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area" },
+      "targets": [
+        { "expr": "kafka_processor_messages_in_flight or vector(0)", "legendFormat": "In-Flight", "refId": "A" }
+      ],
+      "title": "In-Flight (live)",
+      "type": "stat"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
       "id": 100,
       "title": "Pipeline Throughput",
       "type": "row"
@@ -31,7 +134,7 @@
           { "matcher": { "id": "byName", "options": "siphoned" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
       "id": 1,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -47,25 +150,25 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {
-        "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }
+        "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
       "id": 2,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
-          "expr": "kafka_processor_messages_received_total - kafka_processor_messages_published_total - kafka_processor_messages_failed_total",
-          "legendFormat": "in-flight (est.)",
+          "expr": "kafka_processor_messages_in_flight or vector(0)",
+          "legendFormat": "in-flight",
           "refId": "A"
         }
       ],
-      "title": "In-Flight Messages (est.)",
+      "title": "In-Flight Messages",
       "type": "timeseries"
     },
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
       "id": 101,
       "title": "Latency",
       "type": "row"
@@ -76,7 +179,7 @@
       "fieldConfig": {
         "defaults": { "unit": "s", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
       "id": 3,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -84,7 +187,7 @@
         { "expr": "histogram_quantile(0.95, rate(kafka_processor_e2e_latency_seconds_bucket[1m]))", "legendFormat": "P95", "refId": "B" },
         { "expr": "histogram_quantile(0.99, rate(kafka_processor_e2e_latency_seconds_bucket[1m]))", "legendFormat": "P99", "refId": "C" }
       ],
-      "title": "E2E Latency (includes scheduled delay)",
+      "title": "E2E Latency (includes processor delay)",
       "type": "timeseries"
     },
 
@@ -93,7 +196,7 @@
       "fieldConfig": {
         "defaults": { "unit": "s", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
       "id": 4,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -107,7 +210,7 @@
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
       "id": 102,
       "title": "Dead Letters",
       "type": "row"
@@ -118,7 +221,7 @@
       "fieldConfig": {
         "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 19 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
       "id": 5,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -130,7 +233,7 @@
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
       "id": 103,
       "title": "CPU & Memory",
       "type": "row"
@@ -146,7 +249,7 @@
           "custom": { "lineWidth": 2, "fillOpacity": 10 }
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 33 },
       "id": 6,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -166,7 +269,7 @@
           "custom": { "lineWidth": 2, "fillOpacity": 10 }
         }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 33 },
       "id": 7,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -189,7 +292,7 @@
           ]}
         }
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 36 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 41 },
       "id": 8,
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
       "targets": [
@@ -204,7 +307,7 @@
       "fieldConfig": {
         "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
       },
-      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 36 },
+      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 41 },
       "id": 9,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
@@ -221,7 +324,7 @@
       "fieldConfig": {
         "defaults": { "unit": "s", "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 10 } }
       },
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 36 },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 41 },
       "id": 10,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [

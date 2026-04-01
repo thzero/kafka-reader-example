@@ -26,6 +26,9 @@ public class KafkaProducerConfig {
     @Value("${kafka.producer.transactional-id-prefix}")
     private String transactionalIdPrefix;
 
+    @Value("${app.processing.processor-timeout-ms:10000}")
+    private int processorTimeoutMs;
+
     @Bean
     public ProducerFactory<String, String> producerFactory() {
         Map<String, Object> props = new HashMap<>();
@@ -33,6 +36,10 @@ public class KafkaProducerConfig {
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        if (processorTimeoutMs > 0) {
+            props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, processorTimeoutMs);
+            props.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, processorTimeoutMs / 2);
+        }
 
         DefaultKafkaProducerFactory<String, String> factory =
                 new DefaultKafkaProducerFactory<>(props);
@@ -53,6 +60,10 @@ public class KafkaProducerConfig {
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         props.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
+        if (processorTimeoutMs > 0) {
+            props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, processorTimeoutMs);
+            props.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, processorTimeoutMs / 2);
+        }
 
         DefaultKafkaProducerFactory<String, JsonNode> factory =
                 new DefaultKafkaProducerFactory<>(props);
