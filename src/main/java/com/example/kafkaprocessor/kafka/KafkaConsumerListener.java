@@ -8,7 +8,6 @@ import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
 
 import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.util.List;
@@ -18,7 +17,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -26,12 +24,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import jakarta.annotation.PostConstruct;
 
 @Component
 public class KafkaConsumerListener {
@@ -43,14 +36,8 @@ public class KafkaConsumerListener {
     private final MessageProcessorService messageProcessorService;
     private final KafkaProducerService kafkaProducerService;
     private final DeadLetterService deadLetterService;
-    private final ScheduledExecutorService processingScheduler;
     private final List<SiphonEvaluator> siphonEvaluators;
     private final MeterRegistry meterRegistry;
-
-    // In-memory set of messageIds currently in-flight (consumer thread → worker thread).
-    // add() returns false if already present → duplicate detected in nanoseconds with no DB call.
-    // Cleared in the worker's finally block so redelivered messages can re-enter the pipeline.
-    private final Set<String> inFlightIds = ConcurrentHashMap.newKeySet();
 
     // Pre-cached Micrometer meters keyed by eventType.
     // Avoids tag-array (String[]) allocation and registry map lookup on every message in the hot path.
@@ -58,16 +45,7 @@ public class KafkaConsumerListener {
     private final ConcurrentHashMap<String, Counter> receivedCounters  = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Counter> publishedCounters = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Counter> siphonedCounters  = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Timer>   e2eTimers          = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Timer>   pipelineTimers     = new ConcurrentHashMap<>();
-
-    @Value("${app.processing.processor-delay-ms:20000}")
-    private long processorDelayMs;
-    @Value("${app.processing.processor-load-delay-ms:0}")
-    private long processorLoadDelayMs;
-
-    @Value("${app.processing.status-log-interval-ms:10000}")
-    private long statusLogIntervalMs;
+    private final ConcurrentHashMap<String, Timer>   pipelineTimers    = new ConcurrentHashMap<>();
 
     @Value("${kafka.topic.output}")
     private String outputTopic;
@@ -77,7 +55,6 @@ public class KafkaConsumerListener {
                                  MessageProcessorService messageProcessorService,
                                  KafkaProducerService kafkaProducerService,
                                  DeadLetterService deadLetterService,
-                                 @Qualifier("processingScheduler") ScheduledExecutorService processingScheduler,
                                  @Qualifier("activeSiphonEvaluators") List<SiphonEvaluator> siphonEvaluators,
                                  MeterRegistry meterRegistry) {
         this.objectMapper = objectMapper;
@@ -85,29 +62,8 @@ public class KafkaConsumerListener {
         this.messageProcessorService = messageProcessorService;
         this.kafkaProducerService = kafkaProducerService;
         this.deadLetterService = deadLetterService;
-        this.processingScheduler = processingScheduler;
         this.siphonEvaluators = siphonEvaluators;
         this.meterRegistry = meterRegistry;
-    }
-
-    @PostConstruct
-    private void startStatusLogger() {
-        Gauge.builder("kafka.processor.messages.in.flight", inFlightIds, Set::size)
-                .description("Number of messages currently in-flight (scheduled + executing)")
-                .register(meterRegistry);
-        if (statusLogIntervalMs > 0) {
-            processingScheduler.scheduleAtFixedRate(this::logStatus, statusLogIntervalMs, statusLogIntervalMs, TimeUnit.MILLISECONDS);
-        }
-    }
-
-    /** Periodically logs pipeline status: in-flight count. */
-    private void logStatus() {
-        int inFlight = inFlightIds.size();
-        if (inFlight > 0) {
-            log.info("[STATUS] inFlight={}", inFlight);
-        } else {
-            log.debug("[STATUS] idle — inFlight=0");
-        }
     }
 
     @KafkaListener(topics = "${kafka.topic.input}", containerFactory = "kafkaListenerContainerFactory")
@@ -166,136 +122,67 @@ public class KafkaConsumerListener {
                 return;
             }
 
-            // --- In-memory duplicate gate (nanosecond cost, no DB round-trip) ---
-            // ConcurrentHashMap.add() returns false if the messageId was already present, meaning
-            // this messageId is still in-flight (consumer delivered a duplicate within the delay window).
-            // This is purely in-memory; it is cleared on restart. Restart/replay duplicates are caught
-            // by the DB unique constraint on ReceivedRecord.message_id inside the worker thread.
-            if (messageId != null && !inFlightIds.add(messageId)) {
-                log.warn("Duplicate messageId detected in-flight, routing to dead letter");
-                meterRegistry.counter("kafka.processor.messages.failed", "reason", "DUPLICATE").increment();
-                deadLetterService.handle(rawPayload, ReasonCode.DUPLICATE, messageId, interactionId);
-                acknowledgment.acknowledge();
-                return;
-            }
-
-            // Capture MDC context so the scheduled worker thread can restore it.
-            // MDC is thread-local — the worker runs on a different thread.
-            Map<String, String> mdcSnapshot = MDC.getCopyOfContextMap();
-
-            // Start e2e timer here — after all fast-path exits — so it captures the full
-            // pipeline time: scheduled delay + worker execution. Stopped in processDeferred.
-            Timer.Sample e2eSample = Timer.start(meterRegistry);
             receivedCounters.computeIfAbsent(eventType, et -> meterRegistry.counter("kafka.processor.messages.received", "eventType", et)).increment();
-
-            // Schedule work after processor-delay-ms. The task sits in the delay queue —
-            // NO thread is consumed while waiting. A pool of 200 platform threads handles
-            // tens of thousands of concurrently-delayed tasks with zero overhead.
+            Timer.Sample pipelineSample = Timer.start(meterRegistry);
             try {
-                processingScheduler.schedule(
-                    () -> processDeferred(rawPayload, message, messageId, interactionId, acknowledgment, mdcSnapshot, e2eSample, eventType),
-                    processorDelayMs + processorLoadDelayMs, TimeUnit.MILLISECONDS
-                );
-            } catch (Exception e) {
-                // schedule() failed (e.g. RejectedExecutionException — pool shutting down or at capacity).
-                // Must clean up here: inFlightIds entry would leak forever since processDeferred() will never run.
-                log.error("[SCHEDULE-FAIL] eventType={} -- failed to schedule deferred processing, routing to dead letter", eventType, e);
-                inFlightIds.remove(messageId);
-                e2eSample.stop(meterRegistry.timer("kafka.processor.e2e.latency", "eventType", eventType));
-                meterRegistry.counter("kafka.processor.messages.failed", "reason", "PROCESSING_ERROR").increment();
-                deadLetterService.handle(rawPayload, ReasonCode.PROCESSING_ERROR, messageId, interactionId);
-                return; // no ack — redelivery if pool recovers
-            }
+                // --- Write RECEIVED control record ---
+                // DataIntegrityViolationException means the app restarted mid-flight — the ReceivedRecord
+                // row survived but our in-memory state did not. Treat as replay duplicate: DLQ + ack.
+                log.info("[PROCESSING] eventType={}", eventType);
+                try {
+                    controlService.recordReceived(messageId, interactionId);
+                } catch (DataIntegrityViolationException e) {
+                    log.warn("[DUPLICATE] eventType={} -- restart/replay duplicate detected, routing to dead letter", eventType);
+                    meterRegistry.counter("kafka.processor.messages.failed", "reason", "DUPLICATE").increment();
+                    deadLetterService.handle(rawPayload, ReasonCode.DUPLICATE, messageId, interactionId);
+                    acknowledgment.acknowledge();
+                    return;
+                } catch (Exception e) {
+                    log.error("Failed to write RECEIVED control record", e);
+                    meterRegistry.counter("kafka.processor.messages.failed", "reason", "CONTROL_RECORD_ERROR").increment();
+                    deadLetterService.handle(rawPayload, ReasonCode.CONTROL_RECORD_ERROR, messageId, interactionId);
+                    return; // no ack
+                }
 
-            log.info("[SCHEDULED] eventType={} inFlight={}", eventType, inFlightIds.size());
-        }
-        catch (Exception e) {
-                deadLetterService.handle(rawPayload, ReasonCode.LISTENING_ERROR, messageId, interactionId);
-                return; // no ack — redelivery if pool recovers
+                // --- Process and Publish (delegated to EventProcessor via MessageProcessorService) ---
+                // The consumer thread blocks here until processing completes, then moves to the next message.
+                // Timeout is enforced by delivery.timeout.ms on the Kafka producer.
+                try {
+                    messageProcessorService.process(message);
+                } catch (KafkaPublishException e) {
+                    log.error("Publish failed", e);
+                    meterRegistry.counter("kafka.processor.messages.failed", "reason", "PUBLISH_ERROR").increment();
+                    deadLetterService.handle(rawPayload, ReasonCode.PUBLISH_ERROR, messageId, interactionId);
+                    return; // no ack
+                } catch (Exception e) {
+                    log.error("Processing failed", e);
+                    meterRegistry.counter("kafka.processor.messages.failed", "reason", "PROCESSING_ERROR").increment();
+                    deadLetterService.handle(rawPayload, ReasonCode.PROCESSING_ERROR, messageId, interactionId);
+                    return; // no ack
+                }
+
+                // --- Write PUBLISHED control record ---
+                try {
+                    controlService.recordPublished(messageId, interactionId);
+                } catch (Exception e) {
+                    log.error("Failed to write PUBLISHED control record", e);
+                    meterRegistry.counter("kafka.processor.messages.failed", "reason", "CONTROL_RECORD_ERROR").increment();
+                    deadLetterService.handle(rawPayload, ReasonCode.CONTROL_RECORD_ERROR, messageId, interactionId);
+                    return; // no ack
+                }
+
+                // --- Acknowledge only on full success ---
+                publishedCounters.computeIfAbsent(eventType, et -> meterRegistry.counter("kafka.processor.messages.published", "eventType", et)).increment();
+                acknowledgment.acknowledge();
+                log.info("[PUBLISHED] eventType={} -> topic={}", eventType, outputTopic);
+
+            } finally {
+                pipelineSample.stop(pipelineTimers.computeIfAbsent(eventType, et -> meterRegistry.timer("kafka.processor.pipeline.latency", "eventType", et)));
+            }
+        } catch (Exception e) {
+            deadLetterService.handle(rawPayload, ReasonCode.LISTENING_ERROR, messageId, interactionId);
         } finally {
             MdcContext.clear();
-        }
-    }
-
-    private void processDeferred(String rawPayload, KafkaMessage message, String messageId,
-                                  String interactionId, Acknowledgment acknowledgment,
-                                  Map<String, String> mdcSnapshot, Timer.Sample e2eSample,
-                                  String eventType) {
-        // Restore MDC on this worker thread so all log entries carry the same correlation IDs
-        if (mdcSnapshot != null) {
-            MDC.setContextMap(mdcSnapshot);
-        } else {
-            MdcContext.set(interactionId, messageId);
-        }
-        Timer.Sample pipelineSample = Timer.start(meterRegistry);
-        try {
-            // --- Write RECEIVED control record ---
-            // Done on the worker thread so the DB round-trip (Oracle/SQL Server) does not block
-            // the consumer thread. DataIntegrityViolationException here means the app restarted
-            // mid-flight — the in-memory set was lost but the ReceivedRecord row survived.
-            // Treat as a restart/replay duplicate: route to dead letter and ack.
-            log.info("[PROCESSING] eventType={}", eventType);
-            try {
-                controlService.recordReceived(messageId, interactionId);
-            } catch (DataIntegrityViolationException e) {
-                log.warn("[DUPLICATE] eventType={} -- restart/replay duplicate detected, routing to dead letter", eventType);
-                meterRegistry.counter("kafka.processor.messages.failed", "reason", "DUPLICATE").increment();
-                deadLetterService.handle(rawPayload, ReasonCode.DUPLICATE, messageId, interactionId);
-                acknowledgment.acknowledge();
-                return;
-            } catch (Exception e) {
-                log.error("Failed to write RECEIVED control record", e);
-                meterRegistry.counter("kafka.processor.messages.failed", "reason", "CONTROL_RECORD_ERROR").increment();
-                deadLetterService.handle(rawPayload, ReasonCode.CONTROL_RECORD_ERROR, messageId, interactionId);
-                return; // no ack
-            }
-
-            // --- Process and Publish (delegated to EventProcessor via MessageProcessorService) ---
-            // Runs directly on the platform worker thread — no virtual thread wrapping.
-            // Virtual threads pin to carrier threads when they hit Kafka's internal synchronized
-            // blocks, which exhausts the ForkJoinPool and causes exactly the throughput collapse
-            // we are trying to avoid. Platform threads block cleanly.
-            // Timeout is enforced by delivery.timeout.ms on the Kafka producer.
-            try {
-                messageProcessorService.process(message);
-            } catch (KafkaPublishException e) {
-                log.error("Publish failed", e);
-                meterRegistry.counter("kafka.processor.messages.failed", "reason", "PUBLISH_ERROR").increment();
-                deadLetterService.handle(rawPayload, ReasonCode.PUBLISH_ERROR, messageId, interactionId);
-                return; // no ack
-            } catch (Exception e) {
-                log.error("Processing failed", e);
-                meterRegistry.counter("kafka.processor.messages.failed", "reason", "PROCESSING_ERROR").increment();
-                deadLetterService.handle(rawPayload, ReasonCode.PROCESSING_ERROR, messageId, interactionId);
-                return; // no ack
-            }
-
-            // --- Write PUBLISHED control record ---
-            try {
-                controlService.recordPublished(messageId, interactionId);
-            } catch (Exception e) {
-                log.error("Failed to write PUBLISHED control record", e);
-                meterRegistry.counter("kafka.processor.messages.failed", "reason", "CONTROL_RECORD_ERROR").increment();
-                deadLetterService.handle(rawPayload, ReasonCode.CONTROL_RECORD_ERROR, messageId, interactionId);
-                return; // no ack
-            }
-
-            // --- Acknowledge only on full success ---
-            publishedCounters.computeIfAbsent(eventType, et -> meterRegistry.counter("kafka.processor.messages.published", "eventType", et)).increment();
-            acknowledgment.acknowledge();
-            log.info("[PUBLISHED] eventType={} -> topic={}", eventType, outputTopic);
-
-        } finally {
-            // Record instrumentation — timers always stop here regardless of outcome.
-            pipelineSample.stop(pipelineTimers.computeIfAbsent(eventType, et -> meterRegistry.timer("kafka.processor.pipeline.latency", "eventType", et)));
-            e2eSample.stop(e2eTimers.computeIfAbsent(eventType, et -> meterRegistry.timer("kafka.processor.e2e.latency", "eventType", et)));
-            // Always release the in-flight slot:
-            // - On success: clears the slot after ack so an explicit replay can re-enter.
-            // - On failure (no-ack): frees the slot so the redelivered message can re-enter.
-            if (messageId != null) {
-                inFlightIds.remove(messageId);
-            }
-            MDC.clear(); // Full clear: pool threads are reused; selective clear risks leaking keys added elsewhere.
         }
     }
 

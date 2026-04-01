@@ -17,8 +17,6 @@ import org.springframework.lang.NonNull;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 
 @Configuration
 public class KafkaConsumerConfig {
@@ -31,9 +29,6 @@ public class KafkaConsumerConfig {
 
     @Value("${kafka.consumer.concurrency}")
     private int concurrency;
-
-    @Value("${app.processing.worker-threads:24}")
-    private int workerThreads;
 
     @Bean
     public ConsumerFactory<String, String> consumerFactory() {
@@ -57,17 +52,6 @@ public class KafkaConsumerConfig {
         factory.setConcurrency(concurrency);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         return factory;
-    }
-
-    // ScheduledExecutorService with a fixed platform thread pool.
-    // schedule(task, delayMs, MILLISECONDS) puts tasks into a priority queue — ZERO threads
-    // consumed while waiting. Only when the delay fires does a thread execute the task.
-    // 200 platform threads handle tens of thousands of concurrently-delayed messages easily.
-    @Bean(name = "processingScheduler", destroyMethod = "shutdown")
-    public ScheduledExecutorService processingScheduler() {
-        return Executors.newScheduledThreadPool(
-                workerThreads,
-                Thread.ofPlatform().name("kafka-worker-", 0).factory());
     }
 
     /**

@@ -16,7 +16,7 @@ spring:
     username: sa
     password:
     hikari:
-      maximum-pool-size: 200  # match worker-threads so no thread blocks waiting for a connection
+      maximum-pool-size: 5  # sync-inline: one consumer thread, small pool is sufficient
   jpa:
     hibernate:
       ddl-auto: create-drop
@@ -60,25 +60,10 @@ kafka:
 # -----------------------------------------------------------------------
 app:
   processing:
-    # Processor delay (ms): how long to defer processing after a message is received.
-    # Implemented via ScheduledExecutorService.schedule() — NO thread consumed during the wait.
-    # Tens of thousands of messages can be concurrently deferred with a small thread pool.
-    # Set to 0 to disable. Default: 20000 (20 seconds).
-    processor-delay-ms: 20000
-    # Processor load delay (ms): acts as a surrogate for the API load calls. Default: 3500 (35 seconds).
-    processor-load-delay-ms: 3500
     # Hard timeout (ms) for the processor step (business logic + Kafka publish).
-    # If a worker thread exceeds this limit, the message is cancelled and routed to dead letter.
+    # Enforced by delivery.timeout.ms / request.timeout.ms on the Kafka producer.
     # Set to 0 to disable. Default: 10000 (10 seconds).
     processor-timeout-ms: 10000
-    # How often (ms) to log a pipeline status block showing in-flight count.
-    # Logs at INFO when there is active work; at DEBUG when idle.
-    # Set to 0 to disable. Default: 10000 (10 seconds).
-    status-log-interval-ms: 10000
-    # Platform thread pool size for the ScheduledExecutorService.
-    # Only used during actual task execution — zero threads consumed while tasks wait in the delay queue.
-    # Size to the number of tasks you expect executing simultaneously (not waiting). Default: 200.
-    worker-threads: 200
   siphon:
     # Event codes of SiphonEvaluator implementations to activate.
     # Matches SiphonEvaluator.eventCode() on each implementation.
