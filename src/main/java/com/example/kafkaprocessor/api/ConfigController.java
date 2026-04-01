@@ -26,8 +26,10 @@ public class ConfigController {
             String outputTopic) {}
 
     record AppView(
-            long processingDelayMs,
-            int processingWorkerThreads,
+            long processorDelayMs,
+            long processorLoadDelayMs,
+            long processorTimeoutMs,
+            int workerThreads,
             List<String> siphonEnabledEvaluators) {}
 
     private final AppProperties appProperties;
@@ -58,6 +60,6 @@ public class ConfigController {
         AppProperties.Siphon s = appProperties.getSiphon();
         return new ConfigView(
                 new KafkaView(bootstrapServers, consumerGroupId, consumerConcurrency, inputTopic, outputTopic),
-                new AppView(p.getDelayMs(), p.getWorkerThreads(), s.getEnabled()));
+                new AppView(p.getProcessorDelayMs(), p.getProcessorLoadDelayMs(), p.getProcessorTimeoutMs(), p.getWorkerThreads(), s.getEnabled()));
     }
 }
