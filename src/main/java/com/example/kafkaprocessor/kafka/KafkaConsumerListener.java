@@ -7,6 +7,7 @@ import com.example.kafkaprocessor.logging.MdcContext;
 import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
 
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -51,9 +52,18 @@ public class KafkaConsumerListener {
     // Cleared in the worker's finally block so redelivered messages can re-enter the pipeline.
     private final Set<String> inFlightIds = ConcurrentHashMap.newKeySet();
 
+    // Pre-cached Micrometer meters keyed by eventType.
+    // Avoids tag-array (String[]) allocation and registry map lookup on every message in the hot path.
+    // computeIfAbsent registers the meter on first use per eventType; all subsequent calls are a single CHM get.
+    private final ConcurrentHashMap<String, Counter> receivedCounters  = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Counter> publishedCounters = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Counter> siphonedCounters  = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Timer>   e2eTimers          = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Timer>   pipelineTimers     = new ConcurrentHashMap<>();
+
     @Value("${app.processing.processor-delay-ms:20000}")
     private long processorDelayMs;
-    @Value("${app.processor-load-delay-ms:3500}")
+    @Value("${app.processing.processor-load-delay-ms:0}")
     private long processorLoadDelayMs;
 
     @Value("${app.processing.status-log-interval-ms:10000}")
