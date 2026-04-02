@@ -23,8 +23,8 @@ kafka:
 
 app:
   processing:
-    delay-ms: 0
-    worker-threads: 2
+    processor-delay-ms: 0
+    processor-load-delay-ms: 0
   siphon:
     enabled: [bde]
 

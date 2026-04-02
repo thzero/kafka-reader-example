@@ -2,6 +2,7 @@ package com.example.kafkaprocessor.kafka.siphon;
 
 import com.example.kafkaprocessor.model.EventType;
 import com.example.kafkaprocessor.model.KafkaMessage;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 

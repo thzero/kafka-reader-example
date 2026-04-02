@@ -57,19 +57,20 @@
 ### Message Processing
 - Message payloads are JSON; deserialization must be handled on ingest
 - Upon successful deserialization, the message is checked for a **BDE event type siphon** before any other processing
-- If `event.eventType == "END"` and `event.backdated == true` (Backdated Endorsement), the message is published as-is to `kafka.topic.siphon-bde` and acked immediately; it **bypasses the delay, duplicate gate, and processing pipeline entirely**. A siphon publish failure returns without ack (triggers redelivery).
+- If `event.eventType == "END"` and `event.backdated == true` (Backdated Endorsement), the message is published as-is to `kafka.topic.siphon-bde` and acked immediately; it **bypasses the duplicate gate and processing pipeline entirely**. A siphon publish failure returns without ack (triggers redelivery).
 - The siphon routing system is extensible: additional evaluators can be added by implementing the `SiphonEvaluator` interface (methods: `String eventCode()` and `Optional<String> evaluate(KafkaMessage)`) and registering them as `@Component`. Active evaluators are controlled by `app.siphon.enabled` (list of event codes; empty = all active). The consumer uses a `List<SiphonEvaluator>` bean (filtered by active codes) — first match wins.
-- When the consumer thread receives a non-BDE message it first checks the **in-memory in-flight set** (`ConcurrentHashMap`) for the `messageId`; if already present it is a duplicate — route to DUPLICATE dead letter and ack. If not present, the ID is added to the set and the work is scheduled for deferred execution. No DB call happens on the consumer thread.
+- When the consumer thread receives a non-BDE message it first checks the **in-memory in-flight set** (`ConcurrentHashMap`) for the `messageId`; if already present it is a duplicate — route to DUPLICATE dead letter and ack. If not present, the ID is added to the set, the semaphore is acquired (if `app.processing.max-in-flight > 0`), and the work is dispatched for execution via `processingScheduler.execute()`. No DB call happens on the consumer thread.
 - When the worker thread fires and processing actually begins, `ControlService.recordReceived()` is called first (DB INSERT with unique constraint), then processing proceeds — `RECEIVED` represents "processing started"; a `ReceivedRecord` with no matching `PublishedRecord` in reconciliation jobs indicates a genuine processing failure
 - Each message is processed independently and in a concurrent fashion
 - After successful processing, the message is serialized back to JSON and published to a configured Kafka output topic
 - Upon successful publish, the Control Component is invoked to write a `PUBLISHED` control record
 - Offset commit to the input topic is performed only after the output publish and control record write complete successfully
 - Any failure at any stage (deserialization, invalid messageId, processing, publish, or control record write) is handed off to the Dead Letter Component
-- Must delay processing by at least 20 seconds (configurable via `app.processing.delay-ms`) to account for upstream race conditions
-- The delay is implemented using a `ScheduledExecutorService` — the consumer thread schedules the deferred work and returns immediately, so many messages can be waiting out their delay simultaneously without blocking the consumer
-- The number of worker threads in the scheduler is configurable via `app.processing.worker-threads`; size it to handle the maximum number of in-flight messages during the delay window (e.g., 12 msg/sec × 20s = 240 threads)
-- This delay is NOT a Kafka setting — Kafka delivers messages instantly; the delay is introduced by our scheduling logic in `KafkaConsumerListener`
+- The consumer thread dispatches work immediately via `processingScheduler.execute()` — there is no consumer-side scheduling delay; the consumer thread is never blocked waiting for a delay to expire
+- Inside the worker thread, an optional configurable sleep (`app.processing.processor-delay-ms`, default `20000`) runs before business logic executes, to account for upstream race conditions; set to `0` to disable
+- Each worker has a hard timeout (`app.processing.processor-timeout-ms`, default `10000`) — if a worker thread exceeds this limit the message is cancelled and routed to dead letter with reason code `TIMEOUT`
+- Back-pressure is provided by a `Semaphore` (`app.processing.max-in-flight`, default `0` = unlimited) — when the limit is reached the consumer thread blocks on `acquire()` until a worker slot frees up, naturally throttling Kafka polling without pause/resume machinery
+- The number of dispatch threads in the scheduler is configurable via `app.processing.worker-threads` (default `32`); these are platform threads used internally by the `ScheduledThreadPoolExecutor` for the delay queue; actual task execution uses virtual threads
 
 ### Control Records
 - A dedicated **Control Component** is responsible for persisting control records to a database
@@ -93,6 +94,7 @@
     - `PUBLISH_ERROR` — the processed message could not be published to the output topic
     - `CONTROL_RECORD_ERROR` — a control record (received/processed) could not be persisted
     - `DUPLICATE` — `messageId` was already processed (in-memory or DB gate)
+    - `TIMEOUT` — the worker thread exceeded `processor-timeout-ms` before completing
   - A `messageId` where extractable
   - A `failedAt` timestamp
 - Dead Letter storage implementation is pluggable and will be fully configured later; the interface must be defined now
@@ -142,14 +144,16 @@
 #### Configuration View
 - `GET /api/config`
 - Returns the current running configuration as JSON — useful for verifying live config in deployed instances
-- Response fields: `kafka.bootstrapServers`, `kafka.consumerGroupId`, `kafka.consumerConcurrency`, `kafka.inputTopic`, `kafka.outputTopic`, `app.processingDelayMs`, `app.processingWorkerThreads`, `app.siphonEnabledEvaluators`
+- Response fields: `kafka.bootstrapServers`, `kafka.consumerGroupId`, `kafka.consumerConcurrency`, `kafka.inputTopic`, `kafka.outputTopic`, `app.processorDelayMs`, `app.processorTimeoutMs`, `app.maxInFlight`, `app.workerThreads`, `app.siphonEnabledEvaluators`
 - No query parameters
 
 ## Configuration
 - Kafka bootstrap servers, input topic, output topic, `groupId`, and consumer concurrency must all be externally configurable under the `kafka.*` namespace (e.g., `application.yml` / environment variables)
 - Application-specific settings that are not part of Kafka must be externalized under the `app.*` namespace to clearly distinguish them from Kafka/Spring internals:
-  - `app.processing.delay-ms` — delay before processing each message (default: `20000`)
-  - `app.processing.worker-threads` — size of the scheduled executor thread pool per instance (default: `240`)
+  - `app.processing.processor-delay-ms` — sleep applied inside the worker thread before business logic (default: `20000`); set to `0` to disable
+  - `app.processing.processor-timeout-ms` — hard timeout for the worker's execution (default: `10000`); exceeded workers are cancelled and dead-lettered with `TIMEOUT`
+  - `app.processing.max-in-flight` — semaphore cap on concurrent in-flight messages; consumer thread blocks when limit is reached (default: `0` = unlimited)
+  - `app.processing.worker-threads` — core pool size for the `ScheduledThreadPoolExecutor` dispatch threads (default: `32`); actual task execution uses virtual threads; a small value is sufficient
   - `app.siphon.enabled` — list of `SiphonEvaluator` event codes to activate (default: `[bde]`; empty = all active)
   - `kafka.topic.siphon-{event-code}` — one property per siphon evaluator (e.g. `kafka.topic.siphon-bde`)
 - API server port must be externally configurable (`server.port`)

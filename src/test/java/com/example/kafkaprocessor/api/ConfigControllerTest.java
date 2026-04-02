@@ -1,6 +1,12 @@
 package com.example.kafkaprocessor.api;
 
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
 import com.example.kafkaprocessor.config.AppProperties;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -9,11 +15,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
-
-import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(ConfigController.class)
 @TestPropertySource(properties = {
@@ -33,8 +34,8 @@ class ConfigControllerTest {
     @Test
     void getConfig_returnsAllCurrentSettings() throws Exception {
         AppProperties.Processing processing = new AppProperties.Processing();
-        processing.setDelayMs(20000);
-        processing.setWorkerThreads(240);
+        processing.setProcessorDelayMs(20000);
+        processing.setWorkerThreads(200);
         AppProperties.Siphon siphon = new AppProperties.Siphon();
         siphon.setEnabled(List.of("bde"));
         when(appProperties.getProcessing()).thenReturn(processing);
@@ -47,8 +48,8 @@ class ConfigControllerTest {
                 .andExpect(jsonPath("$.kafka.consumerConcurrency").value(1))
                 .andExpect(jsonPath("$.kafka.inputTopic").value("input-topic"))
                 .andExpect(jsonPath("$.kafka.outputTopic").value("output-topic"))
-                .andExpect(jsonPath("$.app.processingDelayMs").value(20000))
-                .andExpect(jsonPath("$.app.processingWorkerThreads").value(240))
+                .andExpect(jsonPath("$.app.processorDelayMs").value(20000))
+                .andExpect(jsonPath("$.app.workerThreads").value(200))
                 .andExpect(jsonPath("$.app.siphonEnabledEvaluators[0]").value("bde"));
     }
 }

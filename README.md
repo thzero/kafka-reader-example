@@ -57,12 +57,11 @@ flowchart TD
     subgraph WT["Worker Thread — ScheduledExecutorService"]
         WT0["0. Restore MDC from snapshot"]
         WT1["1. ControlService.recordReceived()"]
-        WT2["2. MessageProcessorService.process()"]
-        WT3["3. KafkaProducerService.publish()"]
-        WT4["4. ControlService.recordPublished()"]
-        WT5["5. Acknowledgment.acknowledge()"]
-        WT6["finally: inFlightIds.remove()"]
-        WT0 --> WT1 --> WT2 --> WT3 --> WT4 --> WT5 --> WT6
+        WT2["2. MessageProcessorService.process() → EventProcessor.process()"]
+        WT3["3. ControlService.recordPublished()"]
+        WT4["4. Acknowledgment.acknowledge()"]
+        WT5["finally: inFlightIds.remove()"]
+        WT0 --> WT1 --> WT2 --> WT3 --> WT4 --> WT5
     end
 
     CL6 -->|after delay| WT
@@ -196,8 +195,7 @@ Control which are active via `app.siphon.enabled` (empty = all active).
      siphon:
        enabled: [bde, trm]
    ```
-- **All messages are in-flight simultaneously**, each with their own independent 20-second countdown on a separate worker thread
-- The **worker thread pool** is sized to the maximum expected in-flight messages: `msg/sec × delay-ms / 1000` (e.g., 12 msg/sec × 20s = 240 threads)
+- **All messages are in-flight simultaneously**, each executing business logic independently on their own virtual worker thread
 - **Acknowledgment happens on the worker thread** after the full pipeline completes — Kafka does not advance the offset until then
 - If the app restarts mid-flight, un-acked messages are redelivered; the unique constraint on `ReceivedRecord.message_id` catches restart/replay duplicates on the worker thread
 
@@ -282,8 +280,9 @@ Duplicate detection uses two layers so the consumer thread never touches the dat
 | `INVALID_MESSAGE_ID` | `body.messageId` is missing or is not a valid UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
 | `DUPLICATE` | `messageId` already in the in-flight set (same-instance duplicate during delay window), or `DataIntegrityViolationException` from the DB unique constraint (restart/replay duplicate) |
 | `CONTROL_RECORD_ERROR` | Unexpected failure writing the `ReceivedRecord` (not a constraint violation) |
-| `PROCESSING_ERROR` | `MessageProcessorService.process()` threw an exception |
+| `PROCESSING_ERROR` | `MessageProcessorService.process()` threw an exception, or processor timed out (`processor-timeout-ms`) |
 | `PUBLISH_ERROR` | `KafkaProducerService.publish()` threw an exception |
+| `TIMEOUT` | Processor exceeded `processor-timeout-ms` — message cancelled and routed to dead letter |
 
 ---
 
@@ -326,7 +325,7 @@ Response fields: `messageId`, `interactionId`, `reasonCode`, `rawPayload`, `fail
 ### `GET /api/config`
 Returns the current running configuration as JSON.
 
-Response fields: `kafka.bootstrapServers`, `kafka.consumerGroupId`, `kafka.consumerConcurrency`, `kafka.inputTopic`, `kafka.outputTopic`, `app.processingDelayMs`, `app.processingWorkerThreads`, `app.siphonEnabledEvaluators`
+Response shape: `kafka` (bootstrapServers, consumerGroupId, consumerConcurrency, inputTopic, outputTopic) and `app` (processorDelayMs, processorLoadDelayMs, processorTimeoutMs, workerThreads, siphonEnabledEvaluators)
 
 ---
 
@@ -337,18 +336,21 @@ All settings are in `src/main/resources/application.yml`.
 ```yaml
 app:
   processing:
-    delay-ms: 20000       # ms to wait before processing each message (NOT a Kafka setting)
-    worker-threads: 240   # thread pool size = msg/sec × delay-ms / 1000
+    processor-delay-ms: 20000     # ScheduledExecutorService.schedule() delay before business logic; 0 = disabled
+    processor-load-delay-ms: 3500 # surrogate load delay simulating upstream API calls; 0 = disabled
+    processor-timeout-ms: 10000   # hard timeout for processor step; 0 = disabled
+    status-log-interval-ms: 10000 # how often to log in-flight count; 0 = disabled
+    worker-threads: 200           # scheduler core pool size (platform threads for dispatch only)
   siphon:
-    enabled: [bde]        # event codes of active SiphonEvaluators (empty = all active)
+    enabled: [bde]                # event codes of active SiphonEvaluators (empty = all active)
 
 kafka:
   bootstrap-servers: localhost:9092
   consumer:
     group-id: kafka-processor-group
-    concurrency: 1        # threads per instance = partitions ÷ instances (10 ÷ 10 = 1)
+    concurrency: 1            # threads per instance = partitions ÷ instances (10 ÷ 10 = 1)
   producer:
-    transactional-id-prefix: kafkaprocessor-tx   # unique prefix per instance; Spring appends a sequence number
+    transactional-id-prefix: kafkaprocessor-tx-${random.uuid}  # unique per instance restart
   topic:
     input: input-topic
     output: output-topic
@@ -359,7 +361,9 @@ server:
   port: 8080
 ```
 
-**Sizing `worker-threads`:** multiply your expected messages/sec by your `delay-ms` in seconds. At 12 msg/sec with a 20-second delay, up to 240 messages can be simultaneously in-flight.
+**`worker-threads`:** controls how many platform threads the scheduler keeps alive to dispatch tasks. Actual task execution uses virtual threads (Java 21), so this has no effect on throughput or concurrency. A value of 4–8 is sufficient for most workloads.
+
+**`processor-load-delay-ms`:** a secondary sleep on the worker thread simulating time spent calling upstream APIs. Added on top of `processor-delay-ms`. Set to `0` to disable.
 
 **Sizing `concurrency`:** set to `total partitions ÷ deployed instances`. With 10 partitions across 10 instances, `concurrency: 1` gives each instance exactly one partition. Setting it higher creates idle threads.
 

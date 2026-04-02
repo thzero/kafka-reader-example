@@ -15,6 +15,8 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
+    hikari:
+      maximum-pool-size: 200  # match worker-threads so no thread blocks waiting for a connection
   jpa:
     hibernate:
       ddl-auto: create-drop
@@ -58,22 +60,25 @@ kafka:
 # -----------------------------------------------------------------------
 app:
   processing:
-    # Scheduler delay (ms): how long the ScheduledExecutorService waits before handing the
-    # task to a worker thread. Consumer thread returns immediately after scheduling.
-    # Use this to throttle how quickly new messages enter the worker pool.
-    # Set to 0 to disable. Default: 30000 (30 seconds).
-    delay-ms: 30000
-    # Worker delay (ms): Thread.sleep inside the worker thread before executing business logic.
-    # Runs concurrently across all in-flight messages on their own worker threads.
-    # Use this to enforce a minimum processing wait (e.g. upstream race condition buffer).
+    # Processor delay (ms): how long to defer processing after a message is received.
+    # Implemented via ScheduledExecutorService.schedule() — NO thread consumed during the wait.
+    # Tens of thousands of messages can be concurrently deferred with a small thread pool.
     # Set to 0 to disable. Default: 20000 (20 seconds).
-    worker-delay-ms: 20000
-    # Core pool size for the ScheduledThreadPoolExecutor (backed by virtual threads).
-    # Virtual threads are cheap: Thread.sleep and I/O unmount the carrier thread rather than
-    # blocking it, so the old msg/sec * delay sizing formula no longer applies.
-    # This value controls how many threads are kept ready to fire scheduled tasks on time.
-    # A small value (e.g. 8-16 * CPU cores) is sufficient for most workloads.
-    worker-threads: 32
+    processor-delay-ms: 20000
+    # Processor load delay (ms): acts as a surrogate for the API load calls. Default: 3500 (35 seconds).
+    processor-load-delay-ms: 3500
+    # Hard timeout (ms) for the processor step (business logic + Kafka publish).
+    # If a worker thread exceeds this limit, the message is cancelled and routed to dead letter.
+    # Set to 0 to disable. Default: 10000 (10 seconds).
+    processor-timeout-ms: 10000
+    # How often (ms) to log a pipeline status block showing in-flight count.
+    # Logs at INFO when there is active work; at DEBUG when idle.
+    # Set to 0 to disable. Default: 10000 (10 seconds).
+    status-log-interval-ms: 10000
+    # Platform thread pool size for the ScheduledExecutorService.
+    # Only used during actual task execution — zero threads consumed while tasks wait in the delay queue.
+    # Size to the number of tasks you expect executing simultaneously (not waiting). Default: 200.
+    worker-threads: 200
   siphon:
     # Event codes of SiphonEvaluator implementations to activate.
     # Matches SiphonEvaluator.eventCode() on each implementation.

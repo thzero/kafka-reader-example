@@ -1,11 +1,12 @@
 package com.example.kafkaprocessor.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.lang.NonNull;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.util.Objects;
@@ -46,12 +47,14 @@ public class KafkaProducerService {
      * @param topic   target Kafka topic
      * @throws KafkaPublishException if the send fails
      */
-    public void publish(@NonNull String key, @NonNull String payload, @NonNull String topic) {
-        Objects.requireNonNull(topic, "topic must not be null");
-        Objects.requireNonNull(payload, "payload must not be null");
+    public void publish(@Nullable String key, String payload, String topic) {
         kafkaTemplate.executeInTransaction(ops -> {
             try {
-                ops.send(topic, key, payload).get();
+                ops.send(new ProducerRecord<>(
+                    Objects.requireNonNull(topic, "topic must not be null"),
+                    key, // null is valid for Kafka keys (default partition assignment)
+                    Objects.requireNonNull(payload, "payload must not be null")
+                )).get();
             } catch (ExecutionException e) {
                 throw new KafkaPublishException(
                         "Failed to publish to topic=" + topic + " key=" + key, e.getCause());
@@ -59,7 +62,7 @@ public class KafkaProducerService {
                 Thread.currentThread().interrupt();
                 throw new KafkaPublishException("Interrupted publishing to topic=" + topic, e);
             }
-            return Boolean.TRUE;
+            return Objects.requireNonNull(Boolean.TRUE);
         });
         log.info("Published to topic={} key={}", topic, key);
     }
@@ -74,12 +77,14 @@ public class KafkaProducerService {
      * @param topic   target Kafka topic
      * @throws KafkaPublishException if the send fails
      */
-    public void publish(@NonNull String key, @NonNull JsonNode payload, @NonNull String topic) {
-        Objects.requireNonNull(topic, "topic must not be null");
-        Objects.requireNonNull(payload, "payload must not be null");
+    public void publish(@Nullable String key, JsonNode payload, String topic) {
         jsonKafkaTemplate.executeInTransaction(ops -> {
             try {
-                ops.send(topic, key, payload).get();
+                ops.send(new ProducerRecord<>(
+                    Objects.requireNonNull(topic, "topic must not be null"),
+                    key, // null is valid for Kafka keys (default partition assignment)
+                    Objects.requireNonNull(payload, "payload must not be null")
+                )).get();
             } catch (ExecutionException e) {
                 throw new KafkaPublishException(
                         "Failed to publish to topic=" + topic + " key=" + key, e.getCause());
@@ -87,7 +92,7 @@ public class KafkaProducerService {
                 Thread.currentThread().interrupt();
                 throw new KafkaPublishException("Interrupted publishing to topic=" + topic, e);
             }
-            return Boolean.TRUE;
+            return Objects.requireNonNull(Boolean.TRUE);
         });
         log.info("Published to topic={} key={}", topic, key);
     }

@@ -1,5 +1,6 @@
 package com.example.kafkaprocessor.kafka;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,21 +12,21 @@ import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.support.serializer.JsonSerializer;
 import org.springframework.lang.NonNull;
 
-import com.fasterxml.jackson.databind.JsonNode;
-
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 @Configuration
 public class KafkaProducerConfig {
 
     @Value("${kafka.bootstrap-servers}")
-    @NonNull
     private String bootstrapServers;
 
     @Value("${kafka.producer.transactional-id-prefix}")
-    @NonNull
     private String transactionalIdPrefix;
+
+    @Value("${app.processing.processor-timeout-ms:10000}")
+    private int processorTimeoutMs;
 
     @Bean
     public ProducerFactory<String, String> producerFactory() {
@@ -34,10 +35,14 @@ public class KafkaProducerConfig {
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        if (processorTimeoutMs > 0) {
+            props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, processorTimeoutMs);
+            props.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, processorTimeoutMs / 2);
+        }
 
         DefaultKafkaProducerFactory<String, String> factory =
                 new DefaultKafkaProducerFactory<>(props);
-        factory.setTransactionIdPrefix(transactionalIdPrefix);
+        factory.setTransactionIdPrefix(Objects.requireNonNull(transactionalIdPrefix));
         return factory;
     }
 
@@ -54,10 +59,14 @@ public class KafkaProducerConfig {
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         props.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
+        if (processorTimeoutMs > 0) {
+            props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, processorTimeoutMs);
+            props.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, processorTimeoutMs / 2);
+        }
 
         DefaultKafkaProducerFactory<String, JsonNode> factory =
                 new DefaultKafkaProducerFactory<>(props);
-        factory.setTransactionIdPrefix(transactionalIdPrefix + "-json");
+        factory.setTransactionIdPrefix(Objects.requireNonNull(transactionalIdPrefix) + "-json");
         return factory;
     }
 

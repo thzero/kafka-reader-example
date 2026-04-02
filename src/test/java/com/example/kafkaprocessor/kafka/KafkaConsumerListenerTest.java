@@ -1,9 +1,13 @@
 package com.example.kafkaprocessor.kafka;
 
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
 import com.example.kafkaprocessor.control.ControlService;
 import com.example.kafkaprocessor.deadletter.DeadLetterService;
 import com.example.kafkaprocessor.deadletter.ReasonCode;
 import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -16,12 +20,10 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class KafkaConsumerListenerTest {
@@ -50,12 +52,14 @@ class KafkaConsumerListenerTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         scheduler = Executors.newSingleThreadScheduledExecutor();
-        listener = new KafkaConsumerListener(
+        var created = new KafkaConsumerListener(
                 objectMapper, controlService,
                 messageProcessorService, kafkaProducerService, deadLetterService, scheduler,
                 List.of(siphonEvaluator), new SimpleMeterRegistry());
         // Zero delay so deferred work fires immediately, keeping tests fast and deterministic
-        ReflectionTestUtils.setField(listener, "processingDelayMs", 0L);
+        ReflectionTestUtils.setField(created, "processorDelayMs", 0L);
+        ReflectionTestUtils.setField(created, "processorLoadDelayMs", 0L);
+        listener = created;
     }
 
     private ConsumerRecord<String, String> record(String payload) {
@@ -116,9 +120,9 @@ class KafkaConsumerListenerTest {
     }
 
     @Test
-    void bdeEvent_siphonsToSiphonTopic_acks() throws InterruptedException {
+    void bdeEvent_siphonsToSiphonTopic_acks() {
         String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"00000000-0000-0000-0000-0000000000bd\"}}";
-        when(siphonEvaluator.evaluate(any())).thenReturn(java.util.Optional.of("test-siphon-topic"));
+        when(siphonEvaluator.evaluate(any())).thenReturn(Optional.of("test-siphon-topic"));
 
         listener.listen(record(bdePayload), acknowledgment);
 
@@ -128,9 +132,9 @@ class KafkaConsumerListenerTest {
     }
 
     @Test
-    void bdeEvent_siphonFailure_noAck() throws InterruptedException {
+    void bdeEvent_siphonFailure_noAck() {
         String bdePayload = "{\"event\":{\"interactionId\":\"iid-2\",\"eventType\":\"END\",\"backdated\":true},\"body\":{\"messageId\":\"00000000-0000-0000-0000-0000000000bd\"}}";
-        when(siphonEvaluator.evaluate(any())).thenReturn(java.util.Optional.of("test-siphon-topic"));
+        when(siphonEvaluator.evaluate(any())).thenReturn(Optional.of("test-siphon-topic"));
         doThrow(new KafkaPublishException("siphon failed", new RuntimeException()))
                 .when(kafkaProducerService).publish(any(), anyString(), any());
 
@@ -141,15 +145,16 @@ class KafkaConsumerListenerTest {
     }
 
     @Test
-    void duplicateMessage_inFlight_routesToDeadLetter_acks() throws InterruptedException {
+    void duplicateMessage_inFlight_routesToDeadLetter_acks() {
         // Use a mock scheduler so the first message's worker task is captured but never executed,
         // keeping its messageId in the in-flight set when the second message arrives.
         ScheduledExecutorService nonExecutingScheduler = mock(ScheduledExecutorService.class);
-        KafkaConsumerListener l = new KafkaConsumerListener(
+        var l = new KafkaConsumerListener(
                 objectMapper, controlService, messageProcessorService,
                 kafkaProducerService, deadLetterService, nonExecutingScheduler,
                 List.of(siphonEvaluator), new SimpleMeterRegistry());
-        ReflectionTestUtils.setField(l, "processingDelayMs", 0L);
+        ReflectionTestUtils.setField(l, "processorDelayMs", 0L);
+        ReflectionTestUtils.setField(l, "processorLoadDelayMs", 0L);
 
         Acknowledgment ack2 = mock(Acknowledgment.class);
 

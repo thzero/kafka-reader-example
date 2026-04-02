@@ -35,8 +35,10 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
    - `kafka.topic.input`, `kafka.topic.output`
    - `kafka.consumer.concurrency` — set to `partitions ÷ instances` (e.g., 10 partitions / 10 instances = `1`; higher values waste idle threads)
    - `spring.datasource` (H2 in-memory)
-   - `app.processing.delay-ms` (default: `20000`) — delay before processing each message; kept under `app.*` not `kafka.*` because this is our code, not a Kafka setting
-   - `app.processing.worker-threads` (default: `240`) — thread pool size for the scheduled executor; size to peak in-flight messages = msg/sec × delay-ms / 1000
+   - `app.processing.processor-delay-ms` (default: `20000`) — sleep inside the worker thread before business logic; set to `0` to disable
+   - `app.processing.processor-timeout-ms` (default: `10000`) — hard timeout for worker execution; exceeded messages are dead-lettered with `TIMEOUT`
+   - `app.processing.max-in-flight` (default: `0`) — semaphore back-pressure; consumer blocks when limit is reached; `0` = unlimited
+   - `app.processing.worker-threads` (default: `32`) — core pool size for the `ScheduledThreadPoolExecutor`; actual execution uses virtual threads; a small value (4–32) is sufficient
 4. Create base package directory tree under `src/main/java/com/example/kafkaprocessor/`
 
 **Relevant files:** `build.gradle`, `settings.gradle`, `src/main/resources/application.yml`
@@ -164,7 +166,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
    - Sets MDC (`interactionId`, `messageId`)
    - **In-flight duplicate gate**: `inFlightIds = ConcurrentHashMap.newKeySet()` field on the listener; `add()` returns false if already present — nanosecond check, no DB call on consumer thread. ID is removed in worker `finally` block.
    - **Restart/replay duplicate gate**: worker thread calls `controlService.recordReceived()` first; if `DataIntegrityViolationException` fires (in-memory set was lost on restart, row survived), route to dead letter + ack.
-   - Consumer thread flow: deserialize → MDC → `inFlightIds.add()` (duplicate? dead letter + ack) → capture MDC snapshot → `processingScheduler.schedule(delay)` → return immediately
+   - Consumer thread flow: deserialize → MDC → `inFlightIds.add()` (duplicate? dead letter + ack) → acquire semaphore (if `max-in-flight > 0`) → capture MDC snapshot → `processingScheduler.execute()` → return immediately
    - Worker thread flow: restore MDC → `recordReceived()` → process → publish → `recordPublished()` → ack → `inFlightIds.remove()` (in finally)
 
 **Package:** `com.example.kafkaprocessor.kafka`
@@ -235,7 +237,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
    - `INVALID_MESSAGE_ID` — missing or malformed `body.messageId` → dead letter, ack, no output
    - Duplicate `messageId` in-flight — `listen()` called twice with same messageId while first is still scheduled (mock scheduler prevents execution) → `DUPLICATE`, ack and discard
    - Processing failure → `PROCESSING_ERROR`, no ack
-   - Processing delay applied — assert message is scheduled with configured `app.processing.delay-ms` and that process/publish/ack run after the delay fires
+   - Processing starts immediately (no consumer-side delay) — assert `processingScheduler.execute()` is used; assert worker calls `Thread.sleep(processorDelayMs)` before business logic when `processor-delay-ms > 0`
    - Publish failure → `PUBLISH_ERROR`, no ack
 4. Integration tests with `@EmbeddedKafka` (topics: `test-input-topic`, `test-output-topic`, `test-siphon-bde-topic`):
    - Produce normal message to input topic → assert on output topic; `ReceivedRecord` + `PublishedRecord` exist in H2
@@ -285,10 +287,10 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 **Goal**: Expose a read-only JSON snapshot of current running configuration for operational visibility.
 
 1. Ensure `AppProperties` (or equivalent `@ConfigurationProperties` class) binds:
-   - `app.processing.delay-ms`, `app.processing.worker-threads`, `app.siphon.enabled`
+   - `app.processing.processor-delay-ms`, `app.processing.processor-timeout-ms`, `app.processing.max-in-flight`, `app.processing.worker-threads`, `app.siphon.enabled`
 2. Create `ConfigController` (`GET /api/config`):
    - Injects `AppProperties`, `@Value("${kafka.bootstrap-servers}")`, and other kafka props
-   - Returns a flat JSON object with keys: `kafka.bootstrapServers`, `kafka.consumerGroupId`, `kafka.consumerConcurrency`, `kafka.inputTopic`, `kafka.outputTopic`, `app.processingDelayMs`, `app.processingWorkerThreads`, `app.siphonEnabledEvaluators`
+   - Returns a flat JSON object with keys: `kafka.bootstrapServers`, `kafka.consumerGroupId`, `kafka.consumerConcurrency`, `kafka.inputTopic`, `kafka.outputTopic`, `app.processorDelayMs`, `app.processorTimeoutMs`, `app.maxInFlight`, `app.workerThreads`, `app.siphonEnabledEvaluators`
 3. Unit test `ConfigControllerTest` — verify all expected fields are present using `MockMvc`
 
 ---
@@ -377,7 +379,8 @@ KafkaConsumerListener.listen()   (Spring Kafka listener thread)
   ├─ In-flight duplicate check (ConcurrentHashMap) → duplicate? → DUPLICATE dead letter, ack, return
   ├─ Start e2e Timer.Sample
   ├─ Increment messages.received counter
-  └─ Schedule processDeferred() on ScheduledExecutorService (after delay-ms)
+  ├─ Acquire semaphore (if max-in-flight > 0)
+  └─ Execute processDeferred() on ScheduledExecutorService (virtual thread)
            │
            ▼
 KafkaConsumerListener.processDeferred()   (worker thread)
@@ -409,6 +412,6 @@ Actuator              → /actuator/health, /actuator/prometheus, /actuator/metr
 - **Dead Letter does not re-publish to a Kafka DLQ** at this stage — deferred to later config
 - **`MessageProcessorService.process()`** is a stub; business logic filled in separately
 - **Offset is never committed on failure** — partition will replay on restart until DLQ skip logic is added
-- **Concurrency** via a `ScheduledExecutorService` (configured pool size `app.processing.worker-threads`); Spring Kafka `concurrency` property controls consumer threads; processing is deferred to the executor after an initial delay
+- **Concurrency** via a `ScheduledExecutorService` with virtual thread execution; `app.processing.worker-threads` controls the dispatch pool (platform threads, small value sufficient); Spring Kafka `concurrency` controls consumer threads; `app.processing.processor-delay-ms` is an optional per-worker sleep before business logic; `app.processing.max-in-flight` provides semaphore back-pressure on the consumer thread
 - **Siphon routing** is first-match-wins across the `activeSiphonEvaluators` list; the list is filtered at startup by `app.siphon.enabled`; an empty enabled list activates all registered evaluators
 - **Metrics** are recorded via Micrometer; no external metrics infrastructure required for the app itself — Prometheus and Grafana are provided by the Docker Compose stack for local use

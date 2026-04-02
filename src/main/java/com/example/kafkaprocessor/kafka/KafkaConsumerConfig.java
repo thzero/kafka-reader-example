@@ -2,6 +2,7 @@ package com.example.kafkaprocessor.kafka;
 
 import com.example.kafkaprocessor.config.AppProperties;
 import com.example.kafkaprocessor.kafka.siphon.SiphonEvaluator;
+
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.beans.factory.ObjectProvider;
@@ -59,17 +60,15 @@ public class KafkaConsumerConfig {
         return factory;
     }
 
-    // Scheduled thread pool backed by virtual threads (Java 21).
-    // Virtual threads are cheap — Thread.sleep and I/O (DB, Kafka) unmount the carrier thread
-    // rather than blocking it, so thousands of in-flight messages have negligible overhead.
-    // worker-threads is still used as the ScheduledThreadPoolExecutor core pool size (i.e. the
-    // number of threads kept alive to fire scheduled tasks on time); it no longer needs to
-    // be sized to the full in-flight message count.
-    @Bean(destroyMethod = "shutdown")
+    // ScheduledExecutorService with a fixed platform thread pool.
+    // schedule(task, delayMs, MILLISECONDS) puts tasks into a priority queue — ZERO threads
+    // consumed while waiting. Only when the delay fires does a thread execute the task.
+    // 200 platform threads handle tens of thousands of concurrently-delayed messages easily.
+    @Bean(name = "processingScheduler", destroyMethod = "shutdown")
     public ScheduledExecutorService processingScheduler() {
         return Executors.newScheduledThreadPool(
                 workerThreads,
-                Thread.ofVirtual().name("kafka-worker-", 0).factory());
+                Thread.ofPlatform().name("kafka-worker-", 0).factory());
     }
 
     /**

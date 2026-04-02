@@ -1,14 +1,15 @@
 package com.example.kafkaprocessor.kafka.siphon;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.example.kafkaprocessor.model.EventHeader;
 import com.example.kafkaprocessor.model.EventType;
 import com.example.kafkaprocessor.model.KafkaMessage;
 import com.example.kafkaprocessor.model.MessageBody;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 class BdeSiphonEvaluatorTest {
 

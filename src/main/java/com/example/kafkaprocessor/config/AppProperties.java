@@ -25,20 +25,23 @@ public class AppProperties {
 
     public static class Processing {
 
-        /** Milliseconds the ScheduledExecutorService waits before handing the task to a worker thread. 0 disables. */
-        private long delayMs = 30000;
+        private long processorDelayMs = 20000;
+        private long processorLoadDelayMs = 0;
+        private long processorTimeoutMs = 10000;
+        private long statusLogIntervalMs = 10000;
+        private int workerThreads = 200;
 
-        /** Milliseconds the worker thread sleeps before executing business logic (Thread.sleep). 0 disables. */
-        private long workerDelayMs = 20000;
+        public long getProcessorDelayMs() { return processorDelayMs; }
+        public void setProcessorDelayMs(long processorDelayMs) { this.processorDelayMs = processorDelayMs; }
 
-        /** ScheduledThreadPoolExecutor core pool size (virtual threads). Small value sufficient — virtual threads handle I/O waits without blocking carrier threads. */
-        private int workerThreads = 32;
+        public long getProcessorLoadDelayMs() { return processorLoadDelayMs; }
+        public void setProcessorLoadDelayMs(long processorLoadDelayMs) { this.processorLoadDelayMs = processorLoadDelayMs; }
 
-        public long getDelayMs() { return delayMs; }
-        public void setDelayMs(long delayMs) { this.delayMs = delayMs; }
+        public long getProcessorTimeoutMs() { return processorTimeoutMs; }
+        public void setProcessorTimeoutMs(long processorTimeoutMs) { this.processorTimeoutMs = processorTimeoutMs; }
 
-        public long getWorkerDelayMs() { return workerDelayMs; }
-        public void setWorkerDelayMs(long workerDelayMs) { this.workerDelayMs = workerDelayMs; }
+        public long getStatusLogIntervalMs() { return statusLogIntervalMs; }
+        public void setStatusLogIntervalMs(long statusLogIntervalMs) { this.statusLogIntervalMs = statusLogIntervalMs; }
 
         public int getWorkerThreads() { return workerThreads; }
         public void setWorkerThreads(int workerThreads) { this.workerThreads = workerThreads; }

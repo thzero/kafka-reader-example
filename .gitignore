@@ -10,6 +10,7 @@ gradlew.bat
 *.iml
 *.iws
 .vscode/
+bin/
 
 # OS
 .DS_Store
