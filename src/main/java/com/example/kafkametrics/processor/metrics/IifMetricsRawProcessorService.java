@@ -12,9 +12,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -34,60 +34,72 @@ public class IifMetricsRawProcessorService {
     private final IPolicyMasterRepository policyMasterRepository;
     private final IPolicyAorRepository policyAorRepository;
     private final IIifMetricsRawRepository iifMetricsRawRepository;
+    private final IifMetricsIncludedProcessorService iifMetricsIncludedProcessorService;
+    private final IifMetricsPgPointsProcessorService iifMetricsPgPointsProcessorService;
     private final long lookupTimeoutMs;
 
     public IifMetricsRawProcessorService(IPolicyMasterRepository policyMasterRepository,
                                           IPolicyAorRepository policyAorRepository,
                                           IIifMetricsRawRepository iifMetricsRawRepository,
+                                          IifMetricsIncludedProcessorService iifMetricsIncludedProcessorService,
+                                          IifMetricsPgPointsProcessorService iifMetricsPgPointsProcessorService,
                                           AppProperties appProperties) {
         this.policyMasterRepository = policyMasterRepository;
         this.policyAorRepository = policyAorRepository;
         this.iifMetricsRawRepository = iifMetricsRawRepository;
+        this.iifMetricsIncludedProcessorService = iifMetricsIncludedProcessorService;
+        this.iifMetricsPgPointsProcessorService = iifMetricsPgPointsProcessorService;
         this.lookupTimeoutMs = appProperties.getProcessing().getLookupTimeoutMs();
     }
 
+    @Transactional
     public void enrich(String messageId, String agreementProductNbr, ObjectNode node) {
-        CompletableFuture<Optional<PolicyMaster>> policyFuture =
+        CompletableFuture<PolicyMaster> policyFuture =
                 CompletableFuture.supplyAsync(() -> lookupPolicy(agreementProductNbr))
                         .orTimeout(lookupTimeoutMs, TimeUnit.MILLISECONDS);
-        CompletableFuture<Optional<PolicyAor>> aorFuture =
+        CompletableFuture<PolicyAor> aorFuture =
                 CompletableFuture.supplyAsync(() -> lookupAor(agreementProductNbr))
                         .orTimeout(lookupTimeoutMs, TimeUnit.MILLISECONDS);
 
-        PolicyMaster pm = policyFuture.join()
-                .orElseThrow(() -> new RequiredFieldException("agreementProductNbr"));
-        PolicyAor aor = aorFuture.join()
-                .orElseThrow(() -> new RequiredFieldException("agreementProductNbr (AoR)"));
+        PolicyMaster pm = policyFuture.join();
+        PolicyAor aor = aorFuture.join();
 
-        node.put("originalPolicyEffectiveDate", Optional.ofNullable(pm.getOriginalPolicyEffectiveDate())
-                .orElseThrow(() -> new RequiredFieldException("originalPolicyEffectiveDate")).toString());
-        node.put("scenarioCd", Optional.ofNullable(pm.getScenarioCd())
-                .orElseThrow(() -> new RequiredFieldException("scenarioCd")));
-        node.put("agencyNbr", Optional.ofNullable(aor.getAgencyNbr())
-                .orElseThrow(() -> new RequiredFieldException("agencyNbr")));
-        node.put("assigned", Optional.ofNullable(aor.getAssigned())
-                .orElseThrow(() -> new RequiredFieldException("assigned")));
+        if (pm.getOriginalPolicyEffectiveDate() == null)
+            throw new RequiredFieldException("originalPolicyEffectiveDate");
+        if (pm.getScenarioCd() == null)
+            throw new RequiredFieldException("scenarioCd");
+        if (aor.getAgencyNbr() == null)
+            throw new RequiredFieldException("agencyNbr");
+        if (aor.getAssigned() == null)
+            throw new RequiredFieldException("assigned");
+
+        node.put("originalPolicyEffectiveDate", pm.getOriginalPolicyEffectiveDate().toString());
+        node.put("scenarioCd", pm.getScenarioCd());
+        node.put("agencyNbr", aor.getAgencyNbr());
+        node.put("assigned", aor.getAssigned());
 
         iifMetricsRawRepository.saveFromNode(messageId, agreementProductNbr, node);
+        iifMetricsIncludedProcessorService.process(messageId, agreementProductNbr, node);
+        iifMetricsPgPointsProcessorService.process(messageId, agreementProductNbr, node);
     }
 
     @Cacheable("policyMaster")
-    public Optional<PolicyMaster> lookupPolicy(String agreementProductNbr) {
+    public PolicyMaster lookupPolicy(String agreementProductNbr) {
         List<PolicyMaster> results = policyMasterRepository.findByAgreementProductNumber(agreementProductNbr);
         if (results.isEmpty()) {
             log.warn("No PolicyMaster found for agreementProductNbr={}", agreementProductNbr);
-            return Optional.empty();
+            throw new RequiredFieldException("PolicyMaster not found for agreementProductNbr=" + agreementProductNbr);
         }
-        return Optional.of(results.get(0));
+        return results.get(0);
     }
 
     @Cacheable("policyAor")
-    public Optional<PolicyAor> lookupAor(String agreementProductNbr) {
+    public PolicyAor lookupAor(String agreementProductNbr) {
         List<PolicyAor> results = policyAorRepository.findByAgreementProductNumber(agreementProductNbr);
         if (results.isEmpty()) {
             log.warn("No PolicyAor found for agreementProductNbr={}", agreementProductNbr);
-            return Optional.empty();
+            throw new RequiredFieldException("PolicyAor not found for agreementProductNbr=" + agreementProductNbr);
         }
-        return Optional.of(results.get(0));
+        return results.get(0);
     }
 }

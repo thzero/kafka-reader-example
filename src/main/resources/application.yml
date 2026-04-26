@@ -26,7 +26,7 @@ spring:
       enabled: false
   cache:
     type: caffeine
-    cache-names: policyMaster,policyAor
+    cache-names: policyMaster,policyAor,producer,cfmPgPoints
     caffeine:
       spec: maximumSize=10000,expireAfterWrite=15m
 

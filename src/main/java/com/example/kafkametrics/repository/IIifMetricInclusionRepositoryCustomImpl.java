@@ -9,20 +9,20 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 
-public class IIifMetricsRawRepositoryCustomImpl implements IIifMetricsRawRepositoryCustom {
+public class IIifMetricInclusionRepositoryCustomImpl implements IIifMetricInclusionRepositoryCustom {
 
     @PersistenceContext
     private EntityManager em;
 
     @Override
     @Transactional
-    public void saveFromNode(String messageId, String agreementProductNbr, ObjectNode node) {
+    public void saveFromNode(String agreementProductNbr, boolean excludedInd, ObjectNode node) {
         Instant now = Instant.now();
         String assetId = JsonNodes.getText(node, "assetId").orElse(null);
 
         try {
             em.createQuery(
-                    "UPDATE IifMetricsRaw r SET r.effEndDt = :now " +
+                    "UPDATE IifMetricInclusion r SET r.effEndDt = :now " +
                     "WHERE r.agreementProductNbr = :apn " +
                     "AND ((:assetId IS NULL AND r.assetId IS NULL) OR r.assetId = :assetId) " +
                     "AND r.effEndDt = :highDate")
@@ -32,19 +32,16 @@ public class IIifMetricsRawRepositoryCustomImpl implements IIifMetricsRawReposit
                     .setParameter("highDate", EffectiveDateConstants.HIGH_DATE)
                     .executeUpdate();
 
-            IifMetricsRaw raw = new IifMetricsRaw();
-            raw.setMessageId(messageId);
-            raw.setAgreementProductNbr(agreementProductNbr);
-            raw.setAssetId(assetId);
-            raw.setAssetProductEntCd(JsonNodes.getText(node, "assetProductEntCd").orElse(null));
-            raw.setProductFamilyCd(JsonNodes.getText(node, "productFamilyCd").orElse(null));
-            raw.setProductSubFamilyCd(JsonNodes.getText(node, "productSubFamilyCd").orElse(null));
-            raw.setProcessedDt(now.toEpochMilli());
-            raw.setEffBeginDt(now);
-            raw.setEffEndDt(EffectiveDateConstants.HIGH_DATE);
-            em.persist(raw);
+            IifMetricInclusion inclusion = new IifMetricInclusion();
+            inclusion.setAgreementProductNbr(agreementProductNbr);
+            inclusion.setAssetId(assetId);
+            inclusion.setProcessedDt(now);
+            inclusion.setExcludedInd(excludedInd);
+            inclusion.setEffBeginDt(now);
+            inclusion.setEffEndDt(EffectiveDateConstants.HIGH_DATE);
+            em.persist(inclusion);
         } catch (Exception e) {
-            throw new DatabaseException("Failed to persist IifMetricsRaw for messageId=" + messageId, e);
+            throw new DatabaseException("Failed to persist IifMetricInclusion for agreementProductNbr=" + agreementProductNbr, e);
         }
     }
 }

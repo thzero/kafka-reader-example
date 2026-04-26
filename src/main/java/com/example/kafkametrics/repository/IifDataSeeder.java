@@ -9,7 +9,9 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 /**
@@ -27,15 +29,22 @@ public class IifDataSeeder implements CommandLineRunner {
 
     private static final int POLICY_COUNT = 1000;
     private static final int AOR_COUNT = 250;
+    private static final int PRODUCER_PRIMARY_COUNT = AOR_COUNT / 3; // ~83 primaries
 
     private final IPolicyMasterRepository policyMasterRepository;
     private final IPolicyAorRepository policyAorRepository;
+    private final IProducerRepository producerRepository;
+    private final ICfmPgPointsRepository cfmPgPointsRepository;
     private final Random random = new Random(42);
 
     public IifDataSeeder(IPolicyMasterRepository policyMasterRepository,
-                         IPolicyAorRepository policyAorRepository) {
+                         IPolicyAorRepository policyAorRepository,
+                         IProducerRepository producerRepository,
+                         ICfmPgPointsRepository cfmPgPointsRepository) {
         this.policyMasterRepository = policyMasterRepository;
         this.policyAorRepository = policyAorRepository;
+        this.producerRepository = producerRepository;
+        this.cfmPgPointsRepository = cfmPgPointsRepository;
     }
 
     @Override
@@ -67,7 +76,66 @@ public class IifDataSeeder implements CommandLineRunner {
         }
         policyAorRepository.saveAll(aors);
 
-        log.info("[SEED] Done — {} policies, {} AOR records seeded", POLICY_COUNT, AOR_COUNT);
+        // Collect all seeded agencyNbrs, shuffle, and split into primaries (~1/3) and members (~2/3).
+        // Each member maps to one of the primaries as its bonusPrimaryAgencyNbr.
+        List<String> agencyNbrs = aors.stream().map(PolicyAor::getAgencyNbr).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        Collections.shuffle(agencyNbrs, random);
+        List<String> primaries = agencyNbrs.subList(0, PRODUCER_PRIMARY_COUNT);
+        List<String> members   = agencyNbrs.subList(PRODUCER_PRIMARY_COUNT, agencyNbrs.size());
+
+        List<Producer> producers = new ArrayList<>(agencyNbrs.size());
+
+        // Assign a unique cfmCd to each primary (CFM0001, CFM0002, ...)
+        Map<String, String> primaryCfmMap = new HashMap<>();
+        for (int i = 0; i < primaries.size(); i++) {
+            primaryCfmMap.put(primaries.get(i), String.format("CFM%04d", i + 1));
+        }
+
+        // Primaries map to themselves
+        for (String agencyNbr : primaries) {
+            Producer p = new Producer();
+            p.setAgencyNbr(agencyNbr);
+            p.setBonusPrimaryAgencyNbr(agencyNbr);
+            p.setCfmCd(primaryCfmMap.get(agencyNbr));
+            producers.add(p);
+        }
+
+        // Members each map to a random primary
+        for (String agencyNbr : members) {
+            String bonusPrimary = primaries.get(random.nextInt(primaries.size()));
+            Producer p = new Producer();
+            p.setAgencyNbr(agencyNbr);
+            p.setBonusPrimaryAgencyNbr(bonusPrimary);
+            p.setCfmCd(primaryCfmMap.get(bonusPrimary));
+            producers.add(p);
+        }
+        producerRepository.saveAll(producers);
+
+        // Seed cfm_pg_points: one row per cfmCd x product combo, pgPointsValue in {10,15,...,50}
+        int[] pgPointChoices = { 10, 15, 20, 25, 30, 35, 40, 45, 50 };
+        String[][] combos = {
+                { "transport", "auto", "auto"    },
+                { "transport", "auto", "trailer" },
+                { "dwelling",  "home", "home"    },
+                { "dwelling",  "home", "condo"   },
+                { "dwelling",  "home", "renters" }
+        };
+        List<CfmPgPoints> cfmRows = new ArrayList<>(primaryCfmMap.size() * combos.length);
+        for (String cfmCd : primaryCfmMap.values()) {
+            for (String[] combo : combos) {
+                CfmPgPoints row = new CfmPgPoints();
+                row.setCfmCd(cfmCd);
+                row.setProductFamilyCd(combo[0]);
+                row.setProductSubFamilyCd(combo[1]);
+                row.setAssetProductCd(combo[2]);
+                row.setPgPointsValue(pgPointChoices[random.nextInt(pgPointChoices.length)]);
+                cfmRows.add(row);
+            }
+        }
+        cfmPgPointsRepository.saveAll(cfmRows);
+
+        log.info("[SEED] Done — {} policies, {} AOR records, {} producer mappings ({} primaries), {} cfm rows seeded",
+                POLICY_COUNT, AOR_COUNT, producers.size(), primaries.size(), cfmRows.size());
     }
 
     private String randomAlphanumeric(int length) {

@@ -19,4 +19,9 @@ public final class JsonNodes {
         JsonNode n = node.get(field);
         return (n == null || n.isNull()) ? Optional.empty() : Optional.of(n.asText());
     }
+
+    public static Optional<Integer> getInt(ObjectNode node, String field) {
+        JsonNode n = node.get(field);
+        return (n == null || n.isNull()) ? Optional.empty() : Optional.of(n.asInt());
+    }
 }

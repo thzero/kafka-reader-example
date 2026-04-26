@@ -34,7 +34,13 @@ public class IifMetricsRaw {
     private String productSubFamilyCd;
 
     @Column(name = "processed_dt", nullable = false)
-    private Instant processedDt;
+    private long processedDt;
+
+    @Column(name = "eff_begin_dt", nullable = false)
+    private Instant effBeginDt;
+
+    @Column(name = "eff_end_dt", nullable = false)
+    private Instant effEndDt;
 
     public Long getId() { return id; }
 
@@ -56,6 +62,12 @@ public class IifMetricsRaw {
     public String getProductSubFamilyCd() { return productSubFamilyCd; }
     public void setProductSubFamilyCd(String productSubFamilyCd) { this.productSubFamilyCd = productSubFamilyCd; }
 
-    public Instant getProcessedDt() { return processedDt; }
-    public void setProcessedDt(Instant processedDt) { this.processedDt = processedDt; }
+    public long getProcessedDt() { return processedDt; }
+    public void setProcessedDt(long processedDt) { this.processedDt = processedDt; }
+
+    public Instant getEffBeginDt() { return effBeginDt; }
+    public void setEffBeginDt(Instant effBeginDt) { this.effBeginDt = effBeginDt; }
+
+    public Instant getEffEndDt() { return effEndDt; }
+    public void setEffEndDt(Instant effEndDt) { this.effEndDt = effEndDt; }
 }

@@ -715,6 +715,88 @@ A [Bruno](https://www.usebruno.com/) collection is included in the `bruno/` fold
 
 ---
 
+## IIF Metrics Persistence
+
+### SCD Type 2 — Effective Date Tracking
+
+Both `iif_metrics_raw` and `iif_metric_inclusion` implement **Slowly Changing Dimension Type 2** history. Every time a record is written for a given `agreementProductNbr` + `assetId` key, the previous active row is closed and a new row is inserted.
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `eff_begin_dt` | `Instant` | When this version became active |
+| `eff_end_dt` | `Instant` | When this version was superseded; `HIGH_DATE` = still active |
+
+**HIGH_DATE sentinel:** `Instant.ofEpochMilli(1231999900000L)` — defined once in `EffectiveDateConstants.HIGH_DATE` and used as the `eff_end_dt` for any currently active row.
+
+To find the current active record for a key:
+```sql
+SELECT * FROM iif_metrics_raw
+WHERE agreement_product_nbr = ?
+  AND (asset_id = ? OR (asset_id IS NULL AND ? IS NULL))
+  AND eff_end_dt = 1231999900000    -- HIGH_DATE epoch millis
+```
+
+### Write Logic (`saveFromNode`)
+
+Both custom repository implementations (`IIifMetricsRawRepositoryCustomImpl`, `IIifMetricInclusionRepositoryCustomImpl`) follow the same two-step SCD2 write pattern:
+
+1. **Close the previous active row** — JPQL bulk UPDATE sets `effEndDt = now` where `effEndDt = HIGH_DATE` and the key matches. Handles `null` `assetId` with an IS NULL guard:
+   ```
+   ((:assetId IS NULL AND r.assetId IS NULL) OR r.assetId = :assetId)
+   ```
+
+2. **Insert the new row** — `effBeginDt = now`, `effEndDt = HIGH_DATE`.
+
+If no previous active row exists, the UPDATE is a no-op and the INSERT proceeds normally.
+
+### Transaction Boundary
+
+The close + insert pair is atomic. The transaction is opened at the service layer (`IifMetricsRawProcessorService.enrich()`, annotated `@Transactional`) and spans all three table writes:
+
+```
+enrich() — @Transactional (outer transaction begins)
+  └── iifMetricsRawRepository.saveFromNode(...)            — @Transactional(REQUIRED) joins
+        UPDATE iif_metrics_raw SET eff_end_dt = now        (close previous)
+        INSERT INTO iif_metrics_raw                         (insert new)
+  └── iifMetricsIncludedProcessorService.process(...)
+        └── inclusionRepository.saveFromNode(...)           — @Transactional(REQUIRED) joins
+              UPDATE iif_metric_inclusion SET eff_end_dt = now  (close previous)
+              INSERT INTO iif_metric_inclusion                   (insert new)
+  └── iifMetricsPgPointsProcessorService.process(...)
+        └── pgPointsRepository.saveFromNode(...)            — @Transactional(REQUIRED) joins
+              UPDATE iif_metric_pg_points SET eff_end_dt = now  (close previous)
+              INSERT INTO iif_metric_pg_points                   (insert new)
+  commit (or rollback all six statements together)
+```
+
+If any of the six statements fails, all six roll back — no partial SCD2 state is ever committed.
+
+The `CompletableFuture` lookups (`lookupPolicy`, `lookupAor`) run on worker threads **before** the transaction opens, so they are not included in the transaction boundary.
+
+### Why the control table writes are separate transactions
+
+`recordReceived()` and `recordPublished()` run in their own independent `@Transactional` calls and are intentionally **not** merged with the IIF write transaction:
+
+**`recordReceived` is the duplicate guard.** It uses `saveAndFlush()` so the unique constraint on `message_id` fires and commits immediately. If it were merged into the IIF transaction and the IIF writes later failed, the `ReceivedRecord` would roll back — a redelivered message would then pass the duplicate gate a second time and be processed twice.
+
+**The Kafka publish sits between the two control writes.** `recordPublished()` only runs after the Kafka publish succeeds. The publish is not a database operation and cannot be included in a DB transaction. Rolling the IIF writes back because a Kafka publish failed would leave the received record orphaned with no corresponding IIF data.
+
+The full sequence with transaction boundaries is:
+
+```
+recordReceived()           — own @Transactional (commits; duplicate guard fires here)
+  ↓
+enrich() / @Transactional  — IIF writes (raw + inclusion + pg points)
+  ↓
+Kafka publish              — outside any transaction
+  ↓
+recordPublished()          — own @Transactional (only reached on successful publish)
+  ↓
+acknowledgment.acknowledge()
+```
+
+---
+
 ## Documentation
 
 | File | Contents |
