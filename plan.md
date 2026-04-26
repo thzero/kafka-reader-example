@@ -13,7 +13,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 | Language     | Java 21                      |
 | Framework    | Spring Boot 3.x (latest)     |
 | Build Tool   | Gradle (Groovy DSL)          |
-| Base Package | `com.example.kafkaprocessor` |
+| Base Package | `com.example.kafkametrics` |
 | Database     | H2 (in-memory, swappable)    |
 
 ---
@@ -39,7 +39,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
    - `app.processing.processor-timeout-ms` (default: `10000`) — hard timeout for worker execution; exceeded messages are dead-lettered with `TIMEOUT`
    - `app.processing.max-in-flight` (default: `0`) — semaphore back-pressure; consumer blocks when limit is reached; `0` = unlimited
    - `app.processing.worker-threads` (default: `32`) — core pool size for the `ScheduledThreadPoolExecutor`; actual execution uses virtual threads; a small value (4–32) is sufficient
-4. Create base package directory tree under `src/main/java/com/example/kafkaprocessor/`
+4. Create base package directory tree under `src/main/java/com/example/kafkametrics/`
 
 **Relevant files:** `build.gradle`, `settings.gradle`, `src/main/resources/application.yml`
 
@@ -53,7 +53,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 3. Create `KafkaMessage` envelope — fields: `event` (EventHeader), `body` (MessageBody)
 4. Annotate all classes with Jackson `@JsonProperty`
 
-**Package:** `com.example.kafkaprocessor.model`
+**Package:** `com.example.kafkametrics.model`
 
 **Relevant files:**
 - `model/EventHeader.java`
@@ -70,7 +70,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 2. Create `MdcContext` utility — static helpers to set/clear `interactionId` and `messageId` in MDC
 3. MDC must be set immediately after deserialization in the consumer and cleared in a `finally` block
 
-**Package:** `com.example.kafkaprocessor.logging`
+**Package:** `com.example.kafkametrics.logging`
 
 **Relevant files:**
 - `src/main/resources/logback-spring.xml`
@@ -81,7 +81,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 ## Phase 4 — Control Component
 *Depends on Phase 2*
 
-1. Create **two** JPA entities in `com.example.kafkaprocessor.control`:
+1. Create **two** JPA entities in `com.example.kafkametrics.control`:
    - `ReceivedRecord` — `@Table(name = "received_record")` with `@UniqueConstraint` on `message_id`
      - Fields: `id` (auto), `messageId` (unique, not null), `interactionId`, `receivedAt` (Instant, not null)
    - `PublishedRecord` — `@Table(name = "published_record")`, no unique constraint
@@ -92,7 +92,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 5. Create `ControlServiceImpl` implementing `ControlService` — `recordReceived` uses `saveAndFlush()` so the unique constraint fires within the same transaction
 6. Configure `spring.datasource.url=jdbc:h2:mem:controldb` in `application.yml`
 
-**Package:** `com.example.kafkaprocessor.control`
+**Package:** `com.example.kafkametrics.control`
 
 **Relevant files:**
 - `control/ReceivedRecord.java`
@@ -117,7 +117,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
    method: `handle(String rawPayload, ReasonCode reasonCode, String messageId, String interactionId)`
 5. Create `DeadLetterServiceImpl` — persists to H2; implementation is pluggable (swappable later)
 
-**Package:** `com.example.kafkaprocessor.deadletter`
+**Package:** `com.example.kafkametrics.deadletter`
 
 **Relevant files:**
 - `deadletter/ReasonCode.java`
@@ -135,12 +135,12 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
    - `StringSerializer` for key, `JsonSerializer` for value
    - Bootstrap servers from properties
    - Enable **idempotent producer**: `enable.idempotence=true`
-   - Set **transactional ID**: `transactional-id` from properties (unique per instance, e.g. `kafkaprocessor-tx-${instance-id}`)
+   - Set **transactional ID**: `transactional-id` from properties (unique per instance, e.g. `kafkametrics-tx-${instance-id}`)
 2. Create `KafkaProducerService` wrapping `KafkaTemplate<String, KafkaMessage>`:
    - `publish(KafkaMessage message)` — publishes to configured output topic within a Kafka transaction, awaits result,
      throws on failure; logs success at INFO with `interactionId` and `messageId`
 
-**Package:** `com.example.kafkaprocessor.kafka`
+**Package:** `com.example.kafkametrics.kafka`
 
 **Relevant files:**
 - `kafka/KafkaProducerConfig.java`
@@ -169,7 +169,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
    - Consumer thread flow: deserialize → MDC → `inFlightIds.add()` (duplicate? dead letter + ack) → acquire semaphore (if `max-in-flight > 0`) → capture MDC snapshot → `processingScheduler.execute()` → return immediately
    - Worker thread flow: restore MDC → `recordReceived()` → process → publish → `recordPublished()` → ack → `inFlightIds.remove()` (in finally)
 
-**Package:** `com.example.kafkaprocessor.kafka`
+**Package:** `com.example.kafkametrics.kafka`
 
 **Relevant files:**
 - `kafka/KafkaConsumerConfig.java`
@@ -205,7 +205,7 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 6. Add `findByFailedAtBetween` / `findByFailedAtGreaterThanEqual` query methods to `DeadLetterRepository`
 7. Add `server.port` to `application.yml`
 
-**Package:** `com.example.kafkaprocessor.api`
+**Package:** `com.example.kafkametrics.api`
 
 **Relevant files:**
 - `api/QueryController.java`
@@ -216,12 +216,12 @@ A Spring Boot 3.x / Java 21 application built with Gradle (Groovy DSL) that cons
 ## Phase 9 — Application Entry Point & Wiring
 *Depends on all prior phases*
 
-1. Create `KafkaProcessorApplication` with `@SpringBootApplication`
+1. Create `kafkametricsApplication` with `@SpringBootApplication`
 2. Verify all Spring beans wire without circular dependencies
 3. Confirm `application.yml` covers all config keys with sensible local-dev defaults
 
 **Relevant files:**
-- `KafkaProcessorApplication.java`
+- `kafkametricsApplication.java`
 - `src/main/resources/application.yml`
 
 ---

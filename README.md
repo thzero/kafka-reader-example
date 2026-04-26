@@ -350,7 +350,7 @@ kafka:
     group-id: kafka-processor-group
     concurrency: 1            # threads per instance = partitions ÷ instances (10 ÷ 10 = 1)
   producer:
-    transactional-id-prefix: kafkaprocessor-tx-${random.uuid}  # unique per instance restart
+    transactional-id-prefix: kafkametrics-tx-${random.uuid}  # unique per instance restart
   topic:
     input: input-topic
     output: output-topic
@@ -367,15 +367,15 @@ server:
 
 **Sizing `concurrency`:** set to `total partitions ÷ deployed instances`. With 10 partitions across 10 instances, `concurrency: 1` gives each instance exactly one partition. Setting it higher creates idle threads.
 
-**`transactional-id-prefix`:** must be unique per deployed instance. Spring appends a monotonically increasing sequence number to form the full transactional ID. In multi-instance deployments, include an instance identifier in the prefix (e.g. `kafkaprocessor-tx-${INSTANCE_ID}`).
+**`transactional-id-prefix`:** must be unique per deployed instance. Spring appends a monotonically increasing sequence number to form the full transactional ID. In multi-instance deployments, include an instance identifier in the prefix (e.g. `kafkametrics-tx-${INSTANCE_ID}`).
 
 **Database:** the default config uses an H2 in-memory database which is wiped on every restart. For production, replace the `spring.datasource.*` and `spring.jpa.*` blocks with your target database (e.g. PostgreSQL, Oracle, SQL Server) and set `ddl-auto: validate` or `none`:
 
 ```yaml
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/kafkaprocessor
-    username: kafkaprocessor
+    url: jdbc:postgresql://localhost:5432/kafkametrics
+    username: kafkametrics
     password: secret
     driver-class-name: org.postgresql.Driver
   jpa:
@@ -389,8 +389,8 @@ spring:
 ## Project Structure
 
 ```
-src/main/java/com/example/kafkaprocessor/
-├── KafkaProcessorApplication.java       # entry point
+src/main/java/com/example/kafkametrics/
+├── kafkametricsApplication.java       # entry point
 ├── api/
 │   ├── ConfigController.java            # GET /api/config — configuration view
 │   ├── QueryController.java             # REST query endpoints
@@ -431,7 +431,7 @@ src/main/java/com/example/kafkaprocessor/
     ├── KafkaMessage.java                # record — event + body envelope
     └── MessageBody.java                 # record — messageId
 
-src/test/java/com/example/kafkaprocessor/
+src/test/java/com/example/kafkametrics/
 ├── api/
 │   ├── ConfigControllerTest.java        # MVC slice test
 │   └── QueryControllerTest.java         # MVC slice test

@@ -43,16 +43,12 @@ kafka:
     input: input-topic
     # Topic this application publishes processed messages to
     output: output-topic
-    # Siphon topics — one key per SiphonEvaluator implementation.
-    # Naming convention: kafka.topic.siphon-{event-code}
-    # Each evaluator injects its own key via @Value("${kafka.topic.siphon-{code}}").
-    siphon-bde: siphon-bde-topic   # BdeSiphonEvaluator — Backdated Endorsements (END + backdated=true)
 
   producer:
     # Transactional ID prefix for exactly-once semantics (EOS).
     # A random UUID suffix is appended at startup to guarantee uniqueness across instances.
     # Each restart gets a fresh ID — orphaned transactions from a previous run time out naturally.
-    transactional-id-prefix: kafkaprocessor-tx-${random.uuid}
+    transactional-id-prefix: kafkametrics-tx-${random.uuid}
 
 # -----------------------------------------------------------------------
 # Application-specific settings — not part of Kafka or Spring internals.
@@ -60,13 +56,6 @@ kafka:
 # -----------------------------------------------------------------------
 app:
   processing:
-    # Processor delay (ms): how long to defer processing after a message is received.
-    # Implemented via ScheduledExecutorService.schedule() — NO thread consumed during the wait.
-    # Tens of thousands of messages can be concurrently deferred with a small thread pool.
-    # Set to 0 to disable. Default: 20000 (20 seconds).
-    processor-delay-ms: 20000
-    # Processor load delay (ms): acts as a surrogate for the API load calls. Default: 3500 (35 seconds).
-    processor-load-delay-ms: 3500
     # Hard timeout (ms) for the processor step (business logic + Kafka publish).
     # If a worker thread exceeds this limit, the message is cancelled and routed to dead letter.
     # Set to 0 to disable. Default: 10000 (10 seconds).
@@ -79,11 +68,11 @@ app:
     # Only used during actual task execution — zero threads consumed while tasks wait in the delay queue.
     # Size to the number of tasks you expect executing simultaneously (not waiting). Default: 200.
     worker-threads: 200
-  siphon:
-    # Event codes of SiphonEvaluator implementations to activate.
-    # Matches SiphonEvaluator.eventCode() on each implementation.
-    # Empty list = all registered evaluators are active.
-    enabled: [bde]
+  seed-data:
+    # Set to true to seed policy_master and policy_aor with fake data on startup.
+    enabled: true
+  # Source system entity code stamped onto every outbound message header.
+  source-system-ent-cd: KAFKA-METRICS
 
 management:
   endpoints:
