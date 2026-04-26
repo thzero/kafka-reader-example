@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 import com.example.kafkametrics.control.IControlService;
 import com.example.kafkametrics.deadletter.IDeadLetterService;
 import com.example.kafkametrics.deadletter.ReasonCode;
+import com.example.kafkametrics.processor.IEventProcessor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -25,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 class KafkaConsumerListenerTest {
 
     @Mock private IControlService controlService;
-    @Mock private MessageProcessorService messageProcessorService;
+    @Mock private IEventProcessor processor;
     @Mock private IDeadLetterService deadLetterService;
     @Mock private Acknowledgment acknowledgment;
 
@@ -47,7 +48,7 @@ class KafkaConsumerListenerTest {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         var created = new KafkaConsumerListener(
                 objectMapper, controlService,
-                messageProcessorService, deadLetterService, scheduler,
+                processor, deadLetterService, scheduler,
                 new SimpleMeterRegistry());
         listener = created;
     }
@@ -72,11 +73,10 @@ class KafkaConsumerListenerTest {
         awaitScheduler();
 
         verify(controlService).recordReceived(MSG_ID_1, IID_1);
-        verify(messageProcessorService).process(any());
+        verify(processor).process(any(), any());
         verify(controlService).recordPublished(MSG_ID_1, IID_1);
         verify(acknowledgment).acknowledge();
         verifyNoInteractions(deadLetterService);
-        // publish is now inside EventProcessor — not verified on kafkaProducerService here
     }
 
     @Test
@@ -86,7 +86,7 @@ class KafkaConsumerListenerTest {
 
         verify(deadLetterService).handle(eq(badPayload), eq(ReasonCode.INVALID_MESSAGE_ID), eq("not-a-uuid"), eq(IID_1));
         verify(acknowledgment, never()).acknowledge();
-        verifyNoInteractions(controlService, messageProcessorService);
+        verifyNoInteractions(controlService, processor);
     }
 
     @Test
@@ -96,7 +96,7 @@ class KafkaConsumerListenerTest {
 
         verify(deadLetterService).handle(eq(noMessageIdPayload), eq(ReasonCode.INVALID_MESSAGE_ID), isNull(), eq(IID_1));
         verify(acknowledgment, never()).acknowledge();
-        verifyNoInteractions(controlService, messageProcessorService);
+        verifyNoInteractions(controlService, processor);
     }
 
     @Test
@@ -106,7 +106,7 @@ class KafkaConsumerListenerTest {
 
         verify(deadLetterService).handle(eq("not-valid-json"), eq(ReasonCode.DESERIALIZATION_ERROR), isNull(), isNull());
         verify(acknowledgment, never()).acknowledge();
-        verifyNoInteractions(controlService, messageProcessorService);
+        verifyNoInteractions(controlService, processor);
     }
 
     @Test
@@ -115,7 +115,7 @@ class KafkaConsumerListenerTest {
         // keeping its messageId in the in-flight set when the second message arrives.
         ScheduledExecutorService nonExecutingScheduler = mock(ScheduledExecutorService.class);
         var l = new KafkaConsumerListener(
-                objectMapper, controlService, messageProcessorService,
+                objectMapper, controlService, processor,
                 deadLetterService, nonExecutingScheduler,
                 new SimpleMeterRegistry());
 
@@ -129,12 +129,12 @@ class KafkaConsumerListenerTest {
         verify(deadLetterService).handle(eq(VALID_PAYLOAD), eq(ReasonCode.DUPLICATE), eq(MSG_ID_1), eq(IID_1));
         verify(ack2).acknowledge();
         verify(acknowledgment, never()).acknowledge();
-        verifyNoInteractions(messageProcessorService, controlService);
+        verifyNoInteractions(processor, controlService);
     }
 
     @Test
     void processingFailure_routesToDeadLetter_noAck() throws InterruptedException {
-        doThrow(new ProcessingException("boom")).when(messageProcessorService).process(any());
+        doThrow(new ProcessingException("boom")).when(processor).process(any(), any());
 
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();
@@ -146,7 +146,7 @@ class KafkaConsumerListenerTest {
     @Test
     void publishFailure_routesToDeadLetter_noAck() throws InterruptedException {
         doThrow(new KafkaPublishException("publish failed", new RuntimeException()))
-                .when(messageProcessorService).process(any());
+                .when(processor).process(any(), any());
 
         listener.listen(record(VALID_PAYLOAD), acknowledgment);
         awaitScheduler();

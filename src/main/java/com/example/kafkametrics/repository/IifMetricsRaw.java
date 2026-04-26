@@ -2,6 +2,8 @@ package com.example.kafkametrics.repository;
 
 import jakarta.persistence.*;
 
+import java.time.Instant;
+
 @Entity
 @Table(name = "iif_metrics_raw", indexes = {
         @Index(name = "idx_iif_metrics_raw_agreement_product_nbr", columnList = "agreement_product_nbr"),
@@ -31,6 +33,9 @@ public class IifMetricsRaw {
     @Column(name = "product_sub_family_cd")
     private String productSubFamilyCd;
 
+    @Column(name = "processed_dt", nullable = false)
+    private Instant processedDt;
+
     public Long getId() { return id; }
 
     public String getMessageId() { return messageId; }
@@ -50,4 +55,7 @@ public class IifMetricsRaw {
 
     public String getProductSubFamilyCd() { return productSubFamilyCd; }
     public void setProductSubFamilyCd(String productSubFamilyCd) { this.productSubFamilyCd = productSubFamilyCd; }
+
+    public Instant getProcessedDt() { return processedDt; }
+    public void setProcessedDt(Instant processedDt) { this.processedDt = processedDt; }
 }

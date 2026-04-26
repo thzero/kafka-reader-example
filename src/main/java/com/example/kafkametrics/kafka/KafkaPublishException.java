@@ -1,8 +1,10 @@
 package com.example.kafkametrics.kafka;
 
-public class KafkaPublishException extends RuntimeException {
+import com.example.kafkametrics.deadletter.ReasonCode;
+
+public class KafkaPublishException extends ReasonCodeException {
 
     public KafkaPublishException(String message, Throwable cause) {
-        super(message, cause);
+        super(ReasonCode.PUBLISH_ERROR, message, cause);
     }
 }

@@ -24,6 +24,11 @@ spring:
   h2:
     console:
       enabled: false
+  cache:
+    type: caffeine
+    cache-names: policyMaster,policyAor
+    caffeine:
+      spec: maximumSize=10000,expireAfterWrite=15m
 
 kafka:
   # Comma-separated list of Kafka broker addresses
@@ -60,6 +65,10 @@ app:
     # If a worker thread exceeds this limit, the message is cancelled and routed to dead letter.
     # Set to 0 to disable. Default: 10000 (10 seconds).
     processor-timeout-ms: 10000
+    # Timeout (ms) for each individual DB lookup (PolicyMaster / PolicyAor).
+    # If either lookup exceeds this limit the message is routed to dead letter.
+    # Should be well below processor-timeout-ms. Default: 2000 (2 seconds).
+    lookup-timeout-ms: 2000
     # How often (ms) to log a pipeline status block showing in-flight count.
     # Logs at INFO when there is active work; at DEBUG when idle.
     # Set to 0 to disable. Default: 10000 (10 seconds).

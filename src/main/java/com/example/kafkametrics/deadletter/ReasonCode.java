@@ -8,5 +8,6 @@ public enum ReasonCode {
     PROCESSING_ERROR,
     PUBLISH_ERROR,
     CONTROL_RECORD_ERROR,
+    DATABASE_ERROR,
     DUPLICATE
 }

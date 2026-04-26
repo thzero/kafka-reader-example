@@ -1,12 +1,14 @@
 package com.example.kafkametrics.kafka;
 
-public class ProcessingException extends RuntimeException {
+import com.example.kafkametrics.deadletter.ReasonCode;
+
+public class ProcessingException extends ReasonCodeException {
 
     public ProcessingException(String message, Throwable cause) {
-        super(message, cause);
+        super(ReasonCode.PROCESSING_ERROR, message, cause);
     }
 
     public ProcessingException(String message) {
-        super(message);
+        super(ReasonCode.PROCESSING_ERROR, message);
     }
 }

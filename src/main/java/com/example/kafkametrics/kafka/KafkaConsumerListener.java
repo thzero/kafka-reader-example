@@ -5,6 +5,7 @@ import com.example.kafkametrics.deadletter.IDeadLetterService;
 import com.example.kafkametrics.deadletter.ReasonCode;
 import com.example.kafkametrics.logging.MdcContext;
 import com.example.kafkametrics.model.KafkaMessage;
+import com.example.kafkametrics.processor.IEventProcessor;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,7 +39,7 @@ public class KafkaConsumerListener {
 
     private final ObjectMapper objectMapper;
     private final IControlService controlService;
-    private final MessageProcessorService messageProcessorService;
+    private final IEventProcessor processor;
     private final IDeadLetterService deadLetterService;
     private final ScheduledExecutorService processingScheduler;
     private final MeterRegistry meterRegistry;
@@ -62,13 +63,13 @@ public class KafkaConsumerListener {
 
     public KafkaConsumerListener(ObjectMapper objectMapper,
                                  IControlService controlService,
-                                 MessageProcessorService messageProcessorService,
+                                 IEventProcessor processor,
                                  IDeadLetterService deadLetterService,
                                  @Qualifier("processingScheduler") ScheduledExecutorService processingScheduler,
                                  MeterRegistry meterRegistry) {
         this.objectMapper = objectMapper;
         this.controlService = controlService;
-        this.messageProcessorService = messageProcessorService;
+        this.processor = processor;
         this.deadLetterService = deadLetterService;
         this.processingScheduler = processingScheduler;
         this.meterRegistry = meterRegistry;
@@ -206,10 +207,10 @@ public class KafkaConsumerListener {
             // Runs on a platform thread — no VT wrapping. VTs pin on Kafka's synchronized blocks,
             // exhausting the ForkJoinPool. Timeout enforced by delivery.timeout.ms on the producer.
             try {
-                messageProcessorService.process(ctx.message());
-            } catch (KafkaPublishException e) {
-                log.error("Publish failed", e);
-                deadLetter(ctx.rawPayload(), ReasonCode.PUBLISH_ERROR, ctx.messageId(), ctx.interactionId());
+                processor.process(ctx.message().header(), ctx.message().payload());
+            } catch (ReasonCodeException e) {
+                log.error("Processing failed reason={}", e.getReasonCode(), e);
+                deadLetter(ctx.rawPayload(), e.getReasonCode(), ctx.messageId(), ctx.interactionId());
                 return;
             } catch (Exception e) {
                 log.error("Processing failed", e);
